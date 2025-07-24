@@ -13,7 +13,7 @@ Validates that all steps in a phase work together correctly, fulfill phase-level
 ```
 
 ## Required Context
-1. docs/technical-specs-v4.md → Phase requirements and integration points
+1. planning/spec-source.md → Architecture and component boundaries
 2. planning/phase-{N}.md → Phase definition and step specifications
 3. planning/discoveries.md → Implementation insights from all steps in phase
 4. All step implementations → Complete phase codebase

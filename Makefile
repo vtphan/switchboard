@@ -5,13 +5,13 @@
 
 # Build commands
 build:
-	go build -o bin/switchboard cmd/server/*.go
+	go build -o bin/switchboard cmd/switchboard/*.go
 
 run: build
 	./bin/switchboard
 
 dev:
-	go run cmd/server/*.go
+	go run cmd/switchboard/*.go
 
 # Test commands  
 test:

@@ -13,7 +13,7 @@ Implements a single step using RED-GREEN-COVER cycle with architectural validati
 ```
 
 ## Required Context (read in order)
-1. docs/technical-specs-v4.md → Architecture and component boundaries
+1. planning/spec-source.md → Architecture and component boundaries
 2. planning/phase-{N}.md → Step definitions with validation requirements
 3. planning/discoveries.md → Insights from previous steps
 4. planning/code-inventory.md → Existing functions and coverage
