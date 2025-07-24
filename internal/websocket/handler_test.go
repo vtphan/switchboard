@@ -83,6 +83,17 @@ func (m *mockDatabaseManager) Close() error {
 	return nil
 }
 
+type mockHub struct {
+	sendMessageFunc func(message *types.Message, senderID string) error
+}
+
+func (m *mockHub) SendMessage(message *types.Message, senderID string) error {
+	if m.sendMessageFunc != nil {
+		return m.sendMessageFunc(message, senderID)
+	}
+	return nil
+}
+
 // Architectural Validation Tests
 func TestHandler_StructureCompliance(t *testing.T) {
 	// Handler struct exists and can be instantiated
@@ -99,9 +110,10 @@ func TestHandler_ComponentIntegration(t *testing.T) {
 	registry := NewRegistry()
 	sessionManager := &mockSessionManager{}
 	dbManager := &mockDatabaseManager{}
+	hub := &mockHub{}
 	
 	// This will fail until NewHandler is implemented
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, hub)
 	if handler == nil {
 		t.Error("NewHandler should return initialized handler")
 	}
@@ -112,8 +124,9 @@ func TestHandler_NewHandlerInitialization(t *testing.T) {
 	registry := NewRegistry()
 	sessionManager := &mockSessionManager{}
 	dbManager := &mockDatabaseManager{}
+	hub := &mockHub{}
 	
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, hub)
 	
 	if handler == nil {
 		t.Fatal("NewHandler returned nil")
@@ -135,7 +148,7 @@ func TestHandler_QueryParameterValidation(t *testing.T) {
 	registry := NewRegistry()
 	sessionManager := &mockSessionManager{}
 	dbManager := &mockDatabaseManager{}
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
 	
 	tests := []struct {
 		name           string
@@ -237,7 +250,7 @@ func TestHandler_SessionValidationIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionManager := &mockSessionManager{validateFunc: tt.validateFunc}
-			handler := NewHandler(registry, sessionManager, dbManager)
+			handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
 			
 			// Create valid request (without WebSocket headers to avoid upgrade issues)
 			req := httptest.NewRequest("GET", "/ws?user_id=user123&role=student&session_id=session456", nil)
@@ -260,7 +273,7 @@ func TestHandler_ConnectionRegistration(t *testing.T) {
 		},
 	}
 	dbManager := &mockDatabaseManager{}
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
 	
 	// Start test WebSocket server
 	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
@@ -330,7 +343,7 @@ func TestHandler_HistoryReplay(t *testing.T) {
 		},
 	}
 	
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
 	
 	// Start test WebSocket server
 	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
@@ -379,7 +392,7 @@ func TestHandler_ConcurrentConnections(t *testing.T) {
 		},
 	}
 	dbManager := &mockDatabaseManager{}
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
 	
 	// Test that Handler can handle concurrent requests without panicking
 	// Focus on architectural validation rather than network timing
@@ -436,7 +449,7 @@ func TestHandler_HeartbeatMonitoring(t *testing.T) {
 		},
 	}
 	dbManager := &mockDatabaseManager{}
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
 	
 	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
 	defer server.Close()

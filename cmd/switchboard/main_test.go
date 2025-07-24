@@ -2,13 +2,14 @@ package main
 
 import (
 	"testing"
+	"switchboard/internal/app"
 	"switchboard/internal/config"
 )
 
 // ARCHITECTURAL VALIDATION TEST: Application structure and dependency injection
 func TestApplication_ArchitecturalCompliance(t *testing.T) {
 	// Test that Application struct is defined and can be instantiated
-	var _ *Application = (*Application)(nil)
+	var _ *app.Application = (*app.Application)(nil)
 }
 
 // FUNCTIONAL VALIDATION TEST: Configuration integration without database
@@ -35,8 +36,8 @@ func TestApplication_ConfigurationValidation(t *testing.T) {
 // FUNCTIONAL VALIDATION TEST: Application construction validation
 func TestApplication_ConstructorValidation(t *testing.T) {
 	// Test constructor with nil config (should use defaults)
-	app, err := NewApplication(nil)
-	if app != nil || err == nil {
+	application, err := app.NewApplication(nil)
+	if application != nil || err == nil {
 		// Expected to fail due to database initialization requirement
 		// This tests that constructor validation works
 		t.Log("Constructor correctly requires database setup for full initialization")
@@ -46,11 +47,11 @@ func TestApplication_ConstructorValidation(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.HTTP.Port = -1
 	
-	app, err = NewApplication(cfg)
+	application, err = app.NewApplication(cfg)
 	if err == nil {
 		t.Error("Constructor should reject invalid configuration")
 	}
-	if app != nil {
+	if application != nil {
 		t.Error("Constructor should not return application with invalid config")
 	}
 }
@@ -73,7 +74,7 @@ func TestApplication_DependencyStructure(t *testing.T) {
 	cfg := config.DefaultConfig()
 	
 	// Attempt construction (will fail due to database requirement)
-	_, err := NewApplication(cfg)
+	_, err := app.NewApplication(cfg)
 	
 	// Error should be related to database initialization, not structure
 	if err == nil {
@@ -146,7 +147,7 @@ func TestApplication_ErrorHandling(t *testing.T) {
 			cfg := config.DefaultConfig()
 			tc.modify(cfg)
 			
-			_, err := NewApplication(cfg)
+			_, err := app.NewApplication(cfg)
 			if err == nil {
 				t.Errorf("Expected error for %s", tc.name)
 			}

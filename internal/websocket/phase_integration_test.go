@@ -14,6 +14,18 @@ import (
 	"switchboard/pkg/types"
 )
 
+// mockHubIntegration for integration testing - separate from handler_test mockHub to avoid redeclaration
+type mockHubIntegration struct {
+	sendMessageFunc func(message *types.Message, senderID string) error
+}
+
+func (m *mockHubIntegration) SendMessage(message *types.Message, senderID string) error {
+	if m.sendMessageFunc != nil {
+		return m.sendMessageFunc(message, senderID)
+	}
+	return nil
+}
+
 // Phase 2 Integration Tests - Complete Workflow Validation
 // Tests all components working together in realistic scenarios
 
@@ -46,7 +58,7 @@ func TestPhase2_CompleteUserConnectionFlow(t *testing.T) {
 		},
 	}
 	
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHubIntegration{})
 	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
 	defer server.Close()
 	
@@ -158,7 +170,7 @@ func TestPhase2_ConnectionReplacementFlow(t *testing.T) {
 		},
 	}
 	dbManager := &mockDatabaseManager{}
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHubIntegration{})
 	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
 	defer server.Close()
 	
@@ -241,7 +253,7 @@ func TestPhase2_ErrorPropagationFlow(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionManager := &mockSessionManager{validateFunc: tt.sessionValidation}
-			handler := NewHandler(registry, sessionManager, dbManager)
+			handler := NewHandler(registry, sessionManager, dbManager, &mockHubIntegration{})
 			server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
 			defer server.Close()
 			
@@ -277,7 +289,7 @@ func TestPhase2_ConcurrentConnectionsIntegration(t *testing.T) {
 		},
 	}
 	dbManager := &mockDatabaseManager{}
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHubIntegration{})
 	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
 	defer server.Close()
 	
@@ -355,7 +367,7 @@ func TestPhase2_ResourceCleanupCoordination(t *testing.T) {
 		},
 	}
 	dbManager := &mockDatabaseManager{}
-	handler := NewHandler(registry, sessionManager, dbManager)
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHubIntegration{})
 	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
 	defer server.Close()
 	

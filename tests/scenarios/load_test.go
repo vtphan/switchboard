@@ -249,8 +249,15 @@ func TestClassroomScaleLoad(t *testing.T) {
 	
 	t.Log("Starting 5-minute sustained load test...")
 	
-	// Launch concurrent message senders
+	// Launch concurrent message senders and collector
 	var wg sync.WaitGroup
+	
+	// Message collector (MISSING from original test!)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		collectMessages(loadCtx, runner, metrics)
+	}()
 	
 	// Instructor broadcast messages (every 30 seconds)
 	wg.Add(1)
@@ -1088,6 +1095,9 @@ func collectMessages(ctx context.Context, runner *fixtures.ScenarioRunner, metri
 	ticker := time.NewTicker(500 * time.Millisecond) // Check every 500ms
 	defer ticker.Stop()
 	
+	// Track messages already counted per client to avoid double-counting
+	clientMessageCounts := make(map[string]int)
+	
 	for {
 		select {
 		case <-ctx.Done():
@@ -1095,9 +1105,17 @@ func collectMessages(ctx context.Context, runner *fixtures.ScenarioRunner, metri
 		case <-ticker.C:
 			allClients := runner.GetAllClients()
 			
-			for _, client := range allClients {
-				messages := client.GetReceivedMessages()
-				atomic.AddInt64(&metrics.MessagesReceived, int64(len(messages)))
+			for clientID, client := range allClients {
+				// Get current message count without draining
+				currentCount := client.GetMessageCount()
+				previousCount := clientMessageCounts[clientID]
+				
+				// Only count new messages since last check
+				if currentCount > previousCount {
+					newMessages := currentCount - previousCount
+					atomic.AddInt64(&metrics.MessagesReceived, int64(newMessages))
+					clientMessageCounts[clientID] = currentCount
+				}
 			}
 		}
 	}
