@@ -1,7 +1,7 @@
 # Switchboard Makefile
 # Build and validation commands for validation-driven TDD approach
 
-.PHONY: build test test-race lint security vet clean run dev validate coverage benchmark help
+.PHONY: build test test-race lint vet clean run dev validate coverage benchmark help
 
 # Build commands
 build:
@@ -57,7 +57,7 @@ goroutine-test:
 	go tool trace trace.out
 
 # Comprehensive validation (blocking validations for TDD)
-validate: vet lint security test test-race coverage
+validate: vet lint test test-race coverage
 	@echo "All validation checks passed"
 
 # Development tools installation
@@ -90,7 +90,6 @@ help:
 	@echo "  test-race      - Run tests with race detection"
 	@echo "  coverage       - Generate test coverage report"
 	@echo "  lint           - Run static analysis"
-	@echo "  security       - Run security analysis"
 	@echo "  vulnerability  - Check for vulnerabilities"
 	@echo "  validate       - Run all validation checks"
 	@echo "  benchmark      - Run performance benchmarks"

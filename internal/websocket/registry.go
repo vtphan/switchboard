@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"log"
 	"sync"
 )
 
@@ -46,19 +47,24 @@ func (r *Registry) RegisterConnection(conn *Connection) error {
 	// FUNCTIONAL DISCOVERY: Close existing connection asynchronously to prevent deadlock
 	// during registration while ensuring immediate replacement
 	if existingConn, exists := r.globalConnections[userID]; exists {
-		go existingConn.Close() // Close asynchronously to avoid deadlock
+		go func() {
+			if err := existingConn.Close(); err != nil {
+				log.Printf("Failed to close existing connection: %v", err)
+			}
+		}() // Close asynchronously to avoid deadlock
 	}
 	
 	// Add to global map for O(1) user lookup
 	r.globalConnections[userID] = conn
 	
 	// Add to appropriate session-role map for efficient recipient lookup
-	if role == "instructor" {
+	switch role {
+	case "instructor":
 		if r.sessionInstructors[sessionID] == nil {
 			r.sessionInstructors[sessionID] = make(map[string]*Connection)
 		}
 		r.sessionInstructors[sessionID][userID] = conn
-	} else if role == "student" {
+	case "student":
 		if r.sessionStudents[sessionID] == nil {
 			r.sessionStudents[sessionID] = make(map[string]*Connection)
 		}
@@ -99,14 +105,15 @@ func (r *Registry) UnregisterConnection(conn *Connection) {
 	
 	// Remove from session-role map and clean up empty session maps
 	// TECHNICAL DISCOVERY: Clean up empty maps to prevent memory leaks
-	if role == "instructor" {
+	switch role {
+	case "instructor":
 		if instructors, exists := r.sessionInstructors[sessionID]; exists {
 			delete(instructors, userID)
 			if len(instructors) == 0 {
 				delete(r.sessionInstructors, sessionID)
 			}
 		}
-	} else if role == "student" {
+	case "student":
 		if students, exists := r.sessionStudents[sessionID]; exists {
 			delete(students, userID)
 			if len(students) == 0 {

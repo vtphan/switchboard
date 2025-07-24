@@ -58,7 +58,7 @@ func TestPhase2_CompleteUserConnectionFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to establish WebSocket connection: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	
 	// Give time for connection setup and registration
 	time.Sleep(100 * time.Millisecond)
@@ -93,7 +93,7 @@ func TestPhase2_CompleteUserConnectionFlow(t *testing.T) {
 	// Step 4: Verify history messages are received
 	messagesReceived := 0
 	historyComplete := false
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	
 	for {
 		var msg map[string]interface{}
@@ -135,7 +135,7 @@ func TestPhase2_CompleteUserConnectionFlow(t *testing.T) {
 	}
 	
 	// Step 6: Test connection cleanup on disconnect
-	conn.Close()
+	_ = conn.Close()
 	time.Sleep(100 * time.Millisecond) // Give time for cleanup
 	
 	_, exists = registry.GetUserConnection("user123")
@@ -170,7 +170,7 @@ func TestPhase2_ConnectionReplacementFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to establish first connection: %v", err)
 	}
-	defer conn1.Close()
+	defer func() { _ = conn1.Close() }()
 	
 	time.Sleep(50 * time.Millisecond)
 	
@@ -185,7 +185,7 @@ func TestPhase2_ConnectionReplacementFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to establish second connection: %v", err)
 	}
-	defer conn2.Close()
+	defer func() { _ = conn2.Close() }()
 	
 	time.Sleep(100 * time.Millisecond) // Give time for replacement
 	
@@ -313,7 +313,7 @@ func TestPhase2_ConcurrentConnectionsIntegration(t *testing.T) {
 	defer func() {
 		for _, conn := range connections {
 			if conn != nil {
-				conn.Close()
+				_ = conn.Close()
 			}
 		}
 	}()
@@ -370,7 +370,7 @@ func TestPhase2_ResourceCleanupCoordination(t *testing.T) {
 		}
 		
 		time.Sleep(20 * time.Millisecond) // Brief connection time
-		conn.Close()
+		_ = conn.Close()
 		time.Sleep(50 * time.Millisecond) // Give time for cleanup
 		
 		// Verify cleanup happened

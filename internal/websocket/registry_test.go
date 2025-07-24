@@ -7,16 +7,14 @@ import (
 	"time"
 )
 
-// Test WebSocket upgrader for registry tests
-var registryTestUpgrader = testUpgrader
+// Test WebSocket upgrader for registry tests  
+// var registryTestUpgrader = testUpgrader // unused
 
 // Architectural Validation Tests
 func TestRegistry_StructureCompliance(t *testing.T) {
 	// This will fail until Registry is implemented
 	registry := &Registry{}
-	if registry == nil {
-		t.Error("Registry should be defined")
-	}
+	_ = registry // Registry should be properly defined
 }
 
 func TestRegistry_ImportBoundaryCompliance(t *testing.T) {
@@ -61,10 +59,10 @@ func TestRegistry_RegisterConnectionValidation(t *testing.T) {
 	
 	// Test unauthenticated connection
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 	
 	conn := NewConnection(wsConn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	
 	// Connection not authenticated yet
 	err = registry.RegisterConnection(conn)
@@ -78,13 +76,13 @@ func TestRegistry_RegisterConnectionSuccess(t *testing.T) {
 	
 	// Create authenticated connection
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 	
 	conn := NewConnection(wsConn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	
 	// Authenticate the connection
-	conn.SetCredentials("user123", "student", "session456")
+	_ = conn.SetCredentials("user123", "student", "session456")
 	
 	// Should register successfully
 	err := registry.RegisterConnection(conn)
@@ -107,21 +105,21 @@ func TestRegistry_ConnectionReplacement(t *testing.T) {
 	
 	// Create first connection
 	wsConn1 := createTestWebSocketConnection(t)
-	defer wsConn1.Close()
+	defer func() { _ = wsConn1.Close() }()
 	
 	conn1 := NewConnection(wsConn1)
-	defer conn1.Close()
-	conn1.SetCredentials("user123", "student", "session456")
+	defer func() { _ = conn1.Close() }()
+	_ = conn1.SetCredentials("user123", "student", "session456")
 	
-	registry.RegisterConnection(conn1)
+	_ = registry.RegisterConnection(conn1)
 	
 	// Create second connection for same user
 	wsConn2 := createTestWebSocketConnection(t)
-	defer wsConn2.Close()
+	defer func() { _ = wsConn2.Close() }()
 	
 	conn2 := NewConnection(wsConn2)
-	defer conn2.Close()
-	conn2.SetCredentials("user123", "student", "session456")
+	defer func() { _ = conn2.Close() }()
+	_ = conn2.SetCredentials("user123", "student", "session456")
 	
 	// Register second connection - should replace first
 	err := registry.RegisterConnection(conn2)
@@ -147,13 +145,13 @@ func TestRegistry_UnregisterConnection(t *testing.T) {
 	
 	// Register a connection
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 	
 	conn := NewConnection(wsConn)
-	defer conn.Close()
-	conn.SetCredentials("user123", "instructor", "session456")
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetCredentials("user123", "instructor", "session456")
 	
-	registry.RegisterConnection(conn)
+	_ = registry.RegisterConnection(conn)
 	
 	// Verify it's registered
 	_, exists := registry.GetUserConnection("user123")
@@ -189,21 +187,21 @@ func TestRegistry_SessionConnectionLookups(t *testing.T) {
 	
 	// Register instructor connection
 	wsConn1 := createTestWebSocketConnection(t)
-	defer wsConn1.Close()
+	defer func() { _ = wsConn1.Close() }()
 	
 	instructor := NewConnection(wsConn1)
-	defer instructor.Close()
-	instructor.SetCredentials("instructor1", "instructor", "session123")
-	registry.RegisterConnection(instructor)
+	defer func() { _ = instructor.Close() }()
+	_ = instructor.SetCredentials("instructor1", "instructor", "session123")
+	_ = registry.RegisterConnection(instructor)
 	
 	// Register student connection
 	wsConn2 := createTestWebSocketConnection(t)
-	defer wsConn2.Close()
+	defer func() { _ = wsConn2.Close() }()
 	
 	student := NewConnection(wsConn2)
-	defer student.Close()
-	student.SetCredentials("student1", "student", "session123")
-	registry.RegisterConnection(student)
+	defer func() { _ = student.Close() }()
+	_ = student.SetCredentials("student1", "student", "session123")
+	_ = registry.RegisterConnection(student)
 	
 	// Test session-specific lookups
 	allConnections := registry.GetSessionConnections("session123")
@@ -256,13 +254,13 @@ func TestRegistry_ConcurrentRegistration(t *testing.T) {
 			defer wg.Done()
 			
 			wsConn := createTestWebSocketConnection(t)
-			defer wsConn.Close()
+			defer func() { _ = wsConn.Close() }()
 			
 			conn := NewConnection(wsConn)
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			
 			// Use different users to avoid replacement
-			conn.SetCredentials(fmt.Sprintf("user%d", id), "student", "session123")
+			_ = conn.SetCredentials(fmt.Sprintf("user%d", id), "student", "session123")
 			
 			err := registry.RegisterConnection(conn)
 			if err != nil {
@@ -286,13 +284,13 @@ func TestRegistry_ConcurrentLookup(t *testing.T) {
 	// Register some connections first
 	for i := 0; i < 10; i++ {
 		wsConn := createTestWebSocketConnection(t)
-		defer wsConn.Close()
+		defer func() { _ = wsConn.Close() }()
 		
 		conn := NewConnection(wsConn)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		
-		conn.SetCredentials(fmt.Sprintf("user%d", i), "student", "session123")
-		registry.RegisterConnection(conn)
+		_ = conn.SetCredentials(fmt.Sprintf("user%d", i), "student", "session123")
+		_ = registry.RegisterConnection(conn)
 	}
 	
 	const numReaders = 50
@@ -331,13 +329,13 @@ func TestRegistry_ConcurrentRegistrationAndUnregistration(t *testing.T) {
 			if id%2 == 0 {
 				// Register connection
 				wsConn := createTestWebSocketConnection(t)
-				defer wsConn.Close()
+				defer func() { _ = wsConn.Close() }()
 				
 				conn := NewConnection(wsConn)
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				
-				conn.SetCredentials(fmt.Sprintf("user%d", id), "student", "session123")
-				registry.RegisterConnection(conn)
+				_ = conn.SetCredentials(fmt.Sprintf("user%d", id), "student", "session123")
+				_ = registry.RegisterConnection(conn)
 			} else {
 				// Attempt to unregister a connection that might exist
 				userID := fmt.Sprintf("user%d", id-1) // Look for previous user
@@ -364,13 +362,13 @@ func TestRegistry_LookupPerformance(t *testing.T) {
 	const numConnections = 1000
 	for i := 0; i < numConnections; i++ {
 		wsConn := createTestWebSocketConnection(t)
-		defer wsConn.Close()
+		defer func() { _ = wsConn.Close() }()
 		
 		conn := NewConnection(wsConn)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		
-		conn.SetCredentials(fmt.Sprintf("user%d", i), "student", "session123")
-		registry.RegisterConnection(conn)
+		_ = conn.SetCredentials(fmt.Sprintf("user%d", i), "student", "session123")
+		_ = registry.RegisterConnection(conn)
 	}
 	
 	// Test O(1) lookup performance

@@ -31,10 +31,10 @@ func TestConnection_ImportBoundaryCompliance(t *testing.T) {
 // Functional Validation Tests
 func TestConnection_NewConnectionInitialization(t *testing.T) {
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 
 	conn := NewConnection(wsConn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if conn == nil {
 		t.Fatal("NewConnection returned nil")
@@ -55,10 +55,10 @@ func TestConnection_NewConnectionInitialization(t *testing.T) {
 
 func TestConnection_AuthenticationFlow(t *testing.T) {
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 
 	conn := NewConnection(wsConn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Initially not authenticated
 	if conn.IsAuthenticated() {
@@ -90,10 +90,10 @@ func TestConnection_AuthenticationFlow(t *testing.T) {
 
 func TestConnection_WriteJSONValidData(t *testing.T) {
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 
 	conn := NewConnection(wsConn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	testData := map[string]interface{}{
 		"type":    "test",
@@ -109,10 +109,10 @@ func TestConnection_WriteJSONValidData(t *testing.T) {
 
 func TestConnection_WriteJSONInvalidData(t *testing.T) {
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 
 	conn := NewConnection(wsConn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Function type cannot be marshaled to JSON
 	invalidData := map[string]interface{}{
@@ -127,7 +127,7 @@ func TestConnection_WriteJSONInvalidData(t *testing.T) {
 
 func TestConnection_CloseIdempotent(t *testing.T) {
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 
 	conn := NewConnection(wsConn)
 
@@ -149,10 +149,10 @@ func TestConnection_CloseIdempotent(t *testing.T) {
 
 func TestConnection_WriteAfterClose(t *testing.T) {
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 
 	conn := NewConnection(wsConn)
-	conn.Close()
+	_ = conn.Close()
 
 	// Give time for context cancellation to propagate
 	time.Sleep(10 * time.Millisecond)
@@ -170,10 +170,10 @@ func TestConnection_WriteAfterClose(t *testing.T) {
 // Technical Validation Tests (Race Detection)
 func TestConnection_ConcurrentWrites(t *testing.T) {
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 
 	conn := NewConnection(wsConn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	const numGoroutines = 10
 	const messagesPerGoroutine = 10
@@ -190,7 +190,7 @@ func TestConnection_ConcurrentWrites(t *testing.T) {
 					"worker":  id,
 					"message": j,
 				}
-				conn.WriteJSON(testData) // Should be thread-safe
+				_ = conn.WriteJSON(testData) // Should be thread-safe
 			}
 		}(i)
 	}
@@ -200,12 +200,12 @@ func TestConnection_ConcurrentWrites(t *testing.T) {
 
 func TestConnection_ConcurrentCredentialAccess(t *testing.T) {
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 
 	conn := NewConnection(wsConn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	conn.SetCredentials("user123", "student", "session456")
+	_ = conn.SetCredentials("user123", "student", "session456")
 
 	const numGoroutines = 50
 	var wg sync.WaitGroup
@@ -233,7 +233,7 @@ func TestConnection_ConcurrentCredentialAccess(t *testing.T) {
 
 func TestConnection_GoroutineCleanup(t *testing.T) {
 	wsConn := createTestWebSocketConnection(t)
-	defer wsConn.Close()
+	defer func() { _ = wsConn.Close() }()
 
 	conn := NewConnection(wsConn)
 
@@ -259,7 +259,7 @@ func createTestWebSocketConnection(t *testing.T) *websocket.Conn {
 			t.Errorf("Failed to upgrade connection: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Keep connection alive for testing
 		for {

@@ -85,11 +85,9 @@ func (m *mockDatabaseManager) Close() error {
 
 // Architectural Validation Tests
 func TestHandler_StructureCompliance(t *testing.T) {
-	// This will fail until Handler is implemented
+	// Handler struct exists and can be instantiated
 	handler := &Handler{}
-	if handler == nil {
-		t.Error("Handler should be defined")
-	}
+	_ = handler // Handler will always exist after creation
 }
 
 func TestHandler_ImportBoundaryCompliance(t *testing.T) {
@@ -276,7 +274,7 @@ func TestHandler_ConnectionRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to connect to WebSocket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	
 	// Give time for registration
 	time.Sleep(50 * time.Millisecond)
@@ -344,11 +342,11 @@ func TestHandler_HistoryReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	
 	// Read messages (should include history + history_complete)
 	receivedMessages := 0
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	
 	for {
 		var msg map[string]interface{}
@@ -405,7 +403,7 @@ func TestHandler_ConcurrentConnections(t *testing.T) {
 				errors <- err
 				return
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			
 			// Should get 400 (bad request) because no WebSocket headers, but no panic
 			if resp.StatusCode != 400 {
@@ -449,7 +447,7 @@ func TestHandler_HeartbeatMonitoring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	
 	// Test that connection can be established and maintained briefly
 	// Full heartbeat testing would require real-time delays that slow down tests
@@ -462,7 +460,7 @@ func TestHandler_HeartbeatMonitoring(t *testing.T) {
 	}
 	
 	// Test cleanup happens when connection closes
-	conn.Close()
+	_ = conn.Close()
 	time.Sleep(100 * time.Millisecond)
 	
 	_, exists = registry.GetUserConnection("user123")

@@ -75,11 +75,12 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// ARCHITECTURAL DISCOVERY: Delegate session validation to SessionManager interface
 	// enables different validation strategies (cache-first, database-only, etc.)
 	if err := h.sessionManager.ValidateSessionMembership(sessionID, userID, role); err != nil {
-		if err == interfaces.ErrSessionNotFound {
+		switch err {
+		case interfaces.ErrSessionNotFound:
 			http.Error(w, "Session not found or ended", http.StatusNotFound)
-		} else if err == interfaces.ErrUnauthorized {
+		case interfaces.ErrUnauthorized:
 			http.Error(w, "Not authorized to join this session", http.StatusForbidden)
-		} else {
+		default:
 			http.Error(w, "Session validation failed", http.StatusInternalServerError)
 		}
 		return
@@ -102,7 +103,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// prevents race conditions between connection registration and credential access
 	if err := wsConn.SetCredentials(userID, role, sessionID); err != nil {
 		log.Printf("Failed to set credentials: %v", err)
-		wsConn.Close()
+		_ = wsConn.Close()
 		return
 	}
 	
@@ -111,7 +112,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// connections are tracked and available for message routing
 	if err := h.registry.RegisterConnection(wsConn); err != nil {
 		log.Printf("Failed to register connection: %v", err)
-		wsConn.Close()
+		_ = wsConn.Close()
 		return
 	}
 	
@@ -147,7 +148,9 @@ func (h *Handler) sendSessionHistory(conn *Connection) {
 			},
 			"timestamp": time.Now(),
 		}
-		conn.WriteJSON(errorMsg)
+		if err := conn.WriteJSON(errorMsg); err != nil {
+			log.Printf("Failed to send auth error message: %v", err)
+		}
 		return
 	}
 	
@@ -157,10 +160,11 @@ func (h *Handler) sendSessionHistory(conn *Connection) {
 	for _, message := range messages {
 		shouldSend := false
 		
-		if role == "instructor" {
+		switch role {
+		case "instructor":
 			// Instructors see all messages for classroom management
 			shouldSend = true
-		} else if role == "student" {
+		case "student":
 			// Students see messages involving them or broadcasts
 			if message.FromUser == userID || 
 			   (message.ToUser != nil && *message.ToUser == userID) ||
@@ -188,7 +192,9 @@ func (h *Handler) sendSessionHistory(conn *Connection) {
 		},
 		"timestamp": time.Now(),
 	}
-	conn.WriteJSON(completeMsg)
+	if err := conn.WriteJSON(completeMsg); err != nil {
+		log.Printf("Failed to send auth complete message: %v", err)
+	}
 }
 
 // handleConnection manages the connection lifecycle with heartbeat monitoring
@@ -200,15 +206,21 @@ func (h *Handler) handleConnection(conn *Connection) {
 		// FUNCTIONAL DISCOVERY: Deferred cleanup ensures resources are released
 		// even if connection handling panics or exits unexpectedly
 		h.registry.UnregisterConnection(conn)
-		conn.Close()
+		_ = conn.Close()
 	}()
 	
 	// Set up ping/pong heartbeat monitoring
 	// TECHNICAL DISCOVERY: 60-second read deadline with 30-second ping interval
 	// provides reliable connection health monitoring for classroom environments
-	conn.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	if err := conn.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		log.Printf("Failed to set read deadline: %v", err)
+		return
+	}
 	conn.conn.SetPongHandler(func(string) error {
-		conn.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		if err := conn.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			log.Printf("Failed to set read deadline in pong handler: %v", err)
+			return err
+		}
 		return nil
 	})
 	

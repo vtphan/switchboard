@@ -60,7 +60,9 @@ func (c *Connection) writeLoop() {
 			}
 			
 			// FUNCTIONAL DISCOVERY: 5-second timeout balances responsiveness vs classroom network stability
-			c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				return // Exit if we can't set deadline
+			}
 			
 			if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				// Log error but continue processing other messages
