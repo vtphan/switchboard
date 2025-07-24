@@ -399,6 +399,11 @@ func (m *Manager) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// GetDB returns the underlying database connection for migrations
+func (m *Manager) GetDB() *sql.DB {
+	return m.db
+}
+
 // Close shuts down the database manager
 func (m *Manager) Close() error {
 	// TECHNICAL DISCOVERY: Prevent multiple close operations

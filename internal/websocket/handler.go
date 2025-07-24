@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -30,16 +31,23 @@ type Handler struct {
 	registry       *Registry                    // Connection tracking and lookup
 	sessionManager interfaces.SessionManager   // Session validation and management
 	dbManager      interfaces.DatabaseManager  // Message history and persistence
+	hub            HubInterface                 // Message routing coordination
+}
+
+// HubInterface defines the hub methods needed by the WebSocket handler
+type HubInterface interface {
+	SendMessage(message *types.Message, senderID string) error
 }
 
 // NewHandler creates a new WebSocket handler with dependency injection
 // FUNCTIONAL DISCOVERY: Constructor pattern enables proper dependency management
 // and facilitates testing with mock implementations
-func NewHandler(registry *Registry, sessionManager interfaces.SessionManager, dbManager interfaces.DatabaseManager) *Handler {
+func NewHandler(registry *Registry, sessionManager interfaces.SessionManager, dbManager interfaces.DatabaseManager, hub HubInterface) *Handler {
 	return &Handler{
 		registry:       registry,
 		sessionManager: sessionManager,
 		dbManager:      dbManager,
+		hub:            hub,
 	}
 }
 
@@ -257,10 +265,32 @@ func (h *Handler) handleConnection(conn *Connection) {
 		}
 		
 		if messageType == websocket.TextMessage {
-			// INTEGRATION POINT: Forward message to message router (Phase 3)
-			// FUNCTIONAL DISCOVERY: Message forwarding will be implemented in Phase 3
-			// Current logging provides visibility into message flow for debugging
+			// Parse incoming message
+			var message types.Message
+			if err := json.Unmarshal(data, &message); err != nil {
+				log.Printf("Failed to parse message from %s: %v", conn.GetUserID(), err)
+				continue
+			}
+			
 			log.Printf("Received message from %s: %s", conn.GetUserID(), string(data))
+			
+			// Forward message to hub for routing
+			if err := h.hub.SendMessage(&message, conn.GetUserID()); err != nil {
+				log.Printf("Failed to route message from %s: %v", conn.GetUserID(), err)
+				// Send error response back to client
+				errorMsg := map[string]interface{}{
+					"type": "system",
+					"content": map[string]interface{}{
+						"event":   "message_error",
+						"message": "Failed to send message",
+						"error":   err.Error(),
+					},
+					"timestamp": time.Now(),
+				}
+				if err := conn.WriteJSON(errorMsg); err != nil {
+					log.Printf("Failed to send error message to %s: %v", conn.GetUserID(), err)
+				}
+			}
 		}
 	}
 }
