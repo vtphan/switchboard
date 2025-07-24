@@ -44,7 +44,7 @@ benchmark:
 
 # Load testing for real-time components
 load-test:
-	go test -run=TestHighLoad -timeout=10m ./internal/websocket
+	go test -v -run="TestClassroomScaleLoad|TestMessageBurstHandling|TestConcurrentSessionsLoad|TestConnectionStabilityStress" -timeout=30m ./tests/scenarios
 
 # Resource leak detection
 leak-test:

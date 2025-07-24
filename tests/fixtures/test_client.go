@@ -2,6 +2,7 @@ package fixtures
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sync"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"switchboard/pkg/types"
+	"switchboard/pkg/interfaces"
+	wsConnection "switchboard/internal/websocket"
 )
 
 // TestClient represents a WebSocket client for testing
@@ -18,7 +21,8 @@ type TestClient struct {
 	SessionID string
 	ServerURL string
 	
-	conn     *websocket.Conn
+	conn     interfaces.Connection  // Use production Connection interface
+	rawConn  *websocket.Conn       // Keep for reading (like server does)
 	messages chan *types.Message
 	errors   chan error
 	done     chan struct{}
@@ -72,12 +76,21 @@ func (tc *TestClient) Connect(ctx context.Context) error {
 	
 	// Establish WebSocket connection
 	dialer := websocket.DefaultDialer
-	conn, _, err := dialer.DialContext(ctx, u.String(), nil)
+	rawConn, _, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 	
-	tc.conn = conn
+	// Use production Connection wrapper for thread-safe writes
+	tc.conn = wsConnection.NewConnection(rawConn)
+	tc.rawConn = rawConn  // Keep for reading (like server does)
+	
+	// Set credentials to match production pattern
+	if err := tc.conn.SetCredentials(tc.UserID, tc.Role, tc.SessionID); err != nil {
+		rawConn.Close()
+		return fmt.Errorf("failed to set credentials: %w", err)
+	}
+	
 	tc.connected = true
 	
 	// Start message reading goroutine
@@ -104,19 +117,19 @@ func (tc *TestClient) readLoop() {
 	
 	for {
 		tc.mu.RLock()
-		conn := tc.conn
+		rawConn := tc.rawConn
 		closed := tc.closed
 		tc.mu.RUnlock()
 		
-		if closed || conn == nil {
+		if closed || rawConn == nil {
 			return
 		}
 		
 		// Set read timeout
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		rawConn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		
-		var message types.Message
-		err := conn.ReadJSON(&message)
+		// Read message using the same pattern as server (ReadMessage then Unmarshal)
+		messageType, data, err := rawConn.ReadMessage()
 		if err != nil {
 			tc.mu.RLock()
 			stillClosed := tc.closed
@@ -131,14 +144,32 @@ func (tc *TestClient) readLoop() {
 			return
 		}
 		
-		// Send message to channel (non-blocking)
-		select {
-		case tc.messages <- &message:
-		default:
-			// Channel full, drop message (shouldn't happen in tests)
+		if messageType == websocket.TextMessage {
+			var message types.Message
+			err := json.Unmarshal(data, &message)
+			if err != nil {
+				tc.mu.RLock()
+				stillClosed := tc.closed
+				tc.mu.RUnlock()
+				
+				if !stillClosed {
+					select {
+					case tc.errors <- fmt.Errorf("parse error: %w", err):
+					default:
+					}
+				}
+				continue
+			}
+			
+			// Send message to channel (non-blocking)
 			select {
-			case tc.errors <- fmt.Errorf("message channel full, dropping message"):
+			case tc.messages <- &message:
 			default:
+				// Channel full, drop message (shouldn't happen in tests)
+				select {
+				case tc.errors <- fmt.Errorf("message channel full, dropping message"):
+				default:
+				}
 			}
 		}
 	}
@@ -166,8 +197,8 @@ func (tc *TestClient) SendMessage(msgType, context string, content map[string]in
 		message["to_user"] = toUser
 	}
 	
-	// Send message with timeout
-	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	// Send message using production Connection wrapper (thread-safe)
+	// The Connection wrapper handles timeouts and single-writer pattern internally
 	err := conn.WriteJSON(message)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
@@ -303,16 +334,16 @@ func (tc *TestClient) WaitForMessageFrom(fromUser string, timeout time.Duration)
 // SendPing sends a WebSocket ping to test connection health
 func (tc *TestClient) SendPing() error {
 	tc.mu.RLock()
-	conn := tc.conn
+	rawConn := tc.rawConn
 	connected := tc.connected
 	tc.mu.RUnlock()
 	
-	if !connected || conn == nil {
+	if !connected || rawConn == nil {
 		return fmt.Errorf("client not connected")
 	}
 	
-	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	return conn.WriteMessage(websocket.PingMessage, []byte{})
+	rawConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	return rawConn.WriteMessage(websocket.PingMessage, []byte{})
 }
 
 // Close closes the WebSocket connection and cleans up resources
@@ -326,12 +357,14 @@ func (tc *TestClient) Close() error {
 	
 	tc.closed = true
 	
+	// Close the production Connection wrapper (handles cleanup properly)
 	if tc.conn != nil {
-		// Send close message with timeout
-		tc.conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
-		tc.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		// Close connection
 		tc.conn.Close()
+	}
+	
+	// Also close raw connection as fallback
+	if tc.rawConn != nil {
+		tc.rawConn.Close()
 	}
 	
 	// Signal done to any waiting goroutines

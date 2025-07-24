@@ -20,7 +20,8 @@
       "Bash(./tests/run_user_journey_tests.sh:*)",
       "Bash(curl:*)",
       "Bash(rm:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(timeout:*)"
     ],
     "deny": []
   }

@@ -139,8 +139,18 @@ func ValidateMessageFlow(t *testing.T, expected, actual []*types.Message) {
 			t.Errorf("Message %d from_user mismatch: expected %s, got %s", i, expectedMsg.FromUser, actualMsg.FromUser)
 		}
 		
-		if expectedMsg.ToUser != actualMsg.ToUser {
-			t.Errorf("Message %d to_user mismatch: expected %s, got %s", i, expectedMsg.ToUser, actualMsg.ToUser)
+		if (expectedMsg.ToUser == nil && actualMsg.ToUser != nil) || 
+		   (expectedMsg.ToUser != nil && actualMsg.ToUser == nil) ||
+		   (expectedMsg.ToUser != nil && actualMsg.ToUser != nil && *expectedMsg.ToUser != *actualMsg.ToUser) {
+			expectedStr := "<nil>"
+			actualStr := "<nil>" 
+			if expectedMsg.ToUser != nil {
+				expectedStr = *expectedMsg.ToUser
+			}
+			if actualMsg.ToUser != nil {
+				actualStr = *actualMsg.ToUser
+			}
+			t.Errorf("Message %d to_user mismatch: expected %s, got %s", i, expectedStr, actualStr)
 		}
 	}
 }
