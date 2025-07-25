@@ -67,3 +67,27 @@ config/production.yaml
 # Build artifacts
 build/
 target/
+
+# Claude Code development files
+.claude/
+planning/
+scripts/
+CLAUDE.md
+
+# Node.js dependencies and generated files
+node_modules/
+package-lock.json
+
+# Coverage reports
+config_coverage.html
+
+# Example setup scripts
+examples/*/setup-api-keys.sh
+examples/*/experts/
+
+# Test directories
+tests/external-clients-scenarios/
+
+# Documentation files
+examples/student-client-guideline.md
+examples/teacher-client-guideline.md
