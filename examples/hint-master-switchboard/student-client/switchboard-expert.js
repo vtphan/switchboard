@@ -208,8 +208,8 @@ class ExpertSwitchboardClient {
         break;
         
       case 'analytics':
-        // Analytics messages are for teacher dashboard, ignore them
-        console.log(chalk.gray(`📊 Analytics message (ignored)`));
+        // Analytics messages are for teacher dashboard, ignore them silently
+        // (Note: These shouldn't be routed to students by Switchboard, but we handle them gracefully)
         break;
         
       default:

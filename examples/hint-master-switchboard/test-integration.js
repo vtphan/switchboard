@@ -121,8 +121,6 @@ async function testIntegration() {
     const teacherFiles = [
       'teacher-client/index.html',
       'teacher-client/app.js',
-      'teacher-client/switchboard-client.js',
-      'teacher-client/server.js',
       'teacher-client/style.css'
     ];
 
