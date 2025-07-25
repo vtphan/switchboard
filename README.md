@@ -4,6 +4,66 @@ A real-time messaging system designed for educational environments, enabling sea
 
 ## Architecture Overview
 
+```
+                    ┌─────────────────────────────────────────────────────────────┐
+                    │                    Switchboard Server                        │
+                    │                                                             │
+    ┌───────────────┤  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
+    │               │  │   Session   │  │   Message   │  │     Database        │ │
+    │  WebSocket    │  │  Management │  │   Router    │  │   (SQLite)          │ │
+    │   Handler     │  │             │  │    Hub      │  │                     │ │
+    │               │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
+    └───────────────┤                                                           │
+                    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
+                    │  │    REST     │  │ Connection  │  │   Rate Limiting     │ │
+                    │  │     API     │  │  Registry   │  │   & Validation      │ │
+                    │  │             │  │             │  │                     │ │
+                    │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
+                    └─────────────────────────────────────────────────────────────┘
+                                            │
+                           ┌────────────────┼────────────────┐
+                           │                │                │
+                    ┌──────▼──────┐         │         ┌──────▼──────┐
+                    │             │         │         │             │
+              ┌─────┤ Instructor  │         │         │   Student   │─────┐
+              │     │   Client    │         │         │   Client    │     │
+              │     │             │         │         │             │     │
+              │     │ - Web UI    │         │         │ - AI Expert │     │
+              │     │ - Session   │         │         │ - Hint Gen  │     │
+              │     │   Mgmt      │         │         │ - Analytics │     │
+              │     │ - Problem   │         │         │ - Response  │     │
+              │     │   Config    │         │         │   Tracking  │     │
+              │     └─────────────┘         │         └─────────────┘     │
+              │                             │                             │
+              │     ┌─────────────┐         │         ┌─────────────┐     │
+              │     │ Instructor  │         │         │   Student   │     │
+              └─────┤   Client    │         │         │   Client    │─────┘
+                    │     #2      │         │         │     #2      │
+                    └─────────────┘         │         └─────────────┘
+                                            │
+                                     ┌──────▼──────┐
+                                     │             │
+                                     │   Student   │
+                                     │   Client    │
+                                     │     #N      │
+                                     │             │
+                                     └─────────────┘
+
+Message Flow Examples:
+├─ instructor_broadcast: Instructor → Switchboard → All Students
+├─ instructor_inbox:     Student → Switchboard → All Instructors  
+├─ request:              Instructor → Switchboard → Specific Student
+├─ request_response:     Student → Switchboard → All Instructors
+├─ analytics:            Student → Switchboard → All Instructors
+└─ inbox_response:       Instructor → Switchboard → Specific Student
+
+Connection Details:
+├─ WebSocket: ws://localhost:8080/ws?user_id=<id>&role=<role>&session_id=<id>
+├─ Authentication: Query parameter based (user_id, role, session_id)
+├─ Heartbeat: 30s ping/pong, 120s stale cleanup
+└─ Rate Limiting: 100 messages/minute per client
+```
+
 Switchboard is built with a layered architecture following a 5-phase development approach:
 
 1. **Foundation Layer** (`pkg/`) - Core data structures and interfaces
