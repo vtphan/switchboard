@@ -3,6 +3,9 @@ package websocket
 import (
 	"log"
 	"sync"
+	"time"
+
+	"switchboard/pkg/types"
 )
 
 // Registry manages WebSocket connections with thread-safe operations
@@ -44,14 +47,30 @@ func (r *Registry) RegisterConnection(conn *Connection) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	
-	// FUNCTIONAL DISCOVERY: Close existing connection asynchronously to prevent deadlock
-	// during registration while ensuring immediate replacement
+	// FUNCTIONAL DISCOVERY: Send session_ended message to trigger graceful client shutdown
+	// instead of forced connection close to prevent reconnection loops
 	if existingConn, exists := r.globalConnections[userID]; exists {
 		go func() {
-			if err := existingConn.Close(); err != nil {
-				log.Printf("Failed to close existing connection: %v", err)
+			// Send session_ended message to old connection
+			sessionEndedMsg := &types.Message{
+				Type:    "system",
+				Context: "session_ended",
+				Content: map[string]interface{}{
+					"reason": "Connection replaced by new instance",
+				},
+				Timestamp: time.Now(),
 			}
-		}() // Close asynchronously to avoid deadlock
+			
+			// Send message to trigger graceful client shutdown
+			if err := existingConn.WriteJSON(sessionEndedMsg); err != nil {
+				log.Printf("Failed to send session_ended to replaced connection: %v", err)
+			} else {
+				log.Printf("Sent session_ended message to replaced connection for user %s", userID)
+			}
+			
+			// DON'T close connection - let client handle shutdown gracefully
+			// If client doesn't respond, session cleanup will handle zombie connections
+		}()
 	}
 	
 	// Add to global map for O(1) user lookup

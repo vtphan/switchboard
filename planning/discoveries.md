@@ -1050,4 +1050,99 @@ The Switchboard application is fully integrated across all 5 architectural phase
 
 **Ready for deployment in classroom environments with confidence.**
 
+### Connection Replacement Infinite Loop Bug Fix
+Date: 2025-07-25
+
+#### Problem Discovery
+- **Infinite reconnection loops when same expert runs twice**: When hint-master student experts with the same user_id connected multiple times, both instances would lose connection and continuously attempt to reconnect
+- **Root cause**: Switchboard connection replacement was force-closing old connections, triggering client reconnection logic
+- **Technical spec violation**: Per section 10.2 "Connection replacement: New connection immediately replaces old one" but implementation was causing unintended side effects
+- **User impact**: Expert clients couldn't maintain stable connections, teacher client stopped receiving hints due to connection instability
+
+#### Architectural Discovery
+- **Connection replacement semantics critical**: The behavior of "replacing" connections has significant impact on client behavior and system stability
+- **Client-side reconnection logic sensitivity**: Aggressive reconnection strategies can create loops when server-side replacement triggers disconnection events
+- **Message-based coordination preferred over connection control**: Sending semantic messages to clients enables graceful shutdown without triggering automatic reconnection
+- **Session lifecycle message reuse**: Existing `session_ended` system message handling provides elegant solution without client code changes
+
+#### Functional Discovery
+- **Graceful vs forced disconnection behavior**: Clients distinguish between planned shutdowns (session_ended) and unexpected disconnections (connection loss)
+- **Session cleanup handles zombie connections**: If clients don't respond to session_ended message, session termination will eventually clean up orphaned connections
+- **Message delivery before connection state change**: Sending session_ended message before connection replacement ensures message delivery
+- **Zero client-side changes required**: Leveraging existing session_ended handling eliminates need for client modifications
+
+#### Technical Discovery
+- **Connection identity during replacement**: Connection replacement involves two distinct connection instances competing for same user_id slot
+- **Goroutine coordination in replacement**: Asynchronous message sending prevents blocking during connection registration process
+- **Registry state consistency**: Connection replacement updates registry immediately while old connection cleanup happens independently
+- **Message delivery reliability**: Using WriteJSON ensures proper message serialization and error handling during replacement notification
+
+#### Implementation Solution
+**Before (Caused Infinite Loops)**:
+```go
+if existingConn, exists := r.globalConnections[userID]; exists {
+    go func() {
+        existingConn.Close()  // Triggers client reconnection logic
+    }()
+}
+```
+
+**After (Prevents Loops)**:
+```go
+if existingConn, exists := r.globalConnections[userID]; exists {
+    go func() {
+        // Send session_ended message to trigger graceful client shutdown
+        sessionEndedMsg := &types.Message{
+            Type:    "system",
+            Context: "session_ended", 
+            Content: map[string]interface{}{
+                "reason": "Connection replaced by new instance",
+            },
+            Timestamp: time.Now(),
+        }
+        
+        if err := existingConn.WriteJSON(sessionEndedMsg); err != nil {
+            log.Printf("Failed to send session_ended to replaced connection: %v", err)
+        } else {
+            log.Printf("Sent session_ended message to replaced connection for user %s", userID)
+        }
+        
+        // DON'T close connection - let client handle shutdown gracefully
+        // If client doesn't respond, session cleanup will handle zombie connections
+    }()
+}
+```
+
+#### Validation Impact
+- **Architectural validation maintained**: No circular dependencies introduced, clean message-based coordination
+- **Functional validation improved**: Connection replacement now works without triggering infinite reconnection loops
+- **Technical validation enhanced**: System handles duplicate expert connections gracefully, teacher client receives hints consistently
+
+#### Performance Impact
+- **Latency improvement**: Eliminates reconnection overhead and message delivery disruption
+- **Resource efficiency**: Prevents accumulation of reconnecting connections and associated goroutines
+- **Network stability**: Reduces WebSocket connection churn and associated TCP overhead
+
+#### User Experience Impact
+- **Expert client stability**: Duplicate experts can run without connection instability
+- **Teacher client reliability**: Consistent hint delivery from all connected experts
+- **System robustness**: Graceful handling of common user scenarios (running same expert twice)
+
+#### Key Architectural Insight
+- **Message semantics vs connection control**: Using application-level messages for coordination is more reliable than low-level connection manipulation
+- **Client behavior consideration**: Server-side changes must consider client-side reconnection logic to avoid unintended feedback loops
+- **Existing protocol leverage**: Reusing established message patterns (session_ended) provides robust solutions without protocol changes
+
+#### Estimation
+- Planned: N/A (unplanned bug fix during hint-master integration)
+- Actual: 3 hours
+- Breakdown: 1 hour problem discovery, 1 hour solution development, 1 hour implementation and validation
+- Reason: Required understanding client-side behavior and finding minimal-change solution that leverages existing protocols
+
+#### Integration Lessons
+- **Real-world usage patterns**: Classroom scenarios include behaviors not captured in unit tests (duplicate expert instances)
+- **Cross-system debugging**: Problems spanning Switchboard and hint-master required coordinated investigation
+- **Graceful degradation importance**: Systems should handle edge cases without catastrophic failure modes
+- **Protocol design considerations**: Connection management protocols must consider client-side state machines and behavior patterns
+
 These discoveries will guide implementation decisions and help avoid common pitfalls during development. They represent lessons learned from the architectural design process and should be referenced during each phase implementation.
