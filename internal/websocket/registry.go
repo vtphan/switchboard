@@ -160,22 +160,33 @@ func (r *Registry) GetSessionConnections(sessionID string) []*Connection {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	
+	log.Printf("DEBUG: GetSessionConnections called for sessionID: %s", sessionID)
+	
 	var connections []*Connection
 	
 	// Add instructors
 	if instructors, exists := r.sessionInstructors[sessionID]; exists {
-		for _, conn := range instructors {
+		log.Printf("DEBUG: Found %d instructors in session %s", len(instructors), sessionID)
+		for userID, conn := range instructors {
+			log.Printf("DEBUG: Adding instructor connection - userID: %s, role: %s", userID, conn.GetRole())
 			connections = append(connections, conn)
 		}
+	} else {
+		log.Printf("DEBUG: No instructors found for session %s", sessionID)
 	}
 	
 	// Add students
 	if students, exists := r.sessionStudents[sessionID]; exists {
-		for _, conn := range students {
+		log.Printf("DEBUG: Found %d students in session %s", len(students), sessionID)
+		for userID, conn := range students {
+			log.Printf("DEBUG: Adding student connection - userID: %s, role: %s", userID, conn.GetRole())
 			connections = append(connections, conn)
 		}
+	} else {
+		log.Printf("DEBUG: No students found for session %s", sessionID)
 	}
 	
+	log.Printf("DEBUG: GetSessionConnections returning %d total connections for session %s", len(connections), sessionID)
 	return connections
 }
 

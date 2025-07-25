@@ -149,13 +149,9 @@ class TeacherApp {
         console.log(`✅ Session ${this.currentSession.id} ended`);
       }
       
-      // Disconnect WebSocket
-      this.disconnect();
-      
-      this.currentSession = null;
-      this.hideMainContent();
-      this.updateConnectionStatus('disconnected', 'Session ended');
-      this.resetExpertStatus();
+      // Don't disconnect immediately - let the session_ended system message handle cleanup
+      // The server will send a session_ended message which will trigger proper cleanup
+      console.log('⏳ Waiting for session_ended system message to complete cleanup...');
       
       console.log('✅ Session ended successfully');
     } catch (error) {
@@ -352,6 +348,7 @@ class TeacherApp {
         this.currentSession = null;
         this.hideMainContent();
         this.updateConnectionStatus('disconnected', 'Session ended');
+        this.resetExpertStatus(); // Reset expert status when session actually ends
         break;
     }
   }

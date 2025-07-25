@@ -118,11 +118,13 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Register connection with registry from Step 2.2
 	// FUNCTIONAL DISCOVERY: Registration after authentication ensures only valid
 	// connections are tracked and available for message routing
+	log.Printf("DEBUG: Registering connection - userID: %s, role: %s, sessionID: %s", userID, role, sessionID)
 	if err := h.registry.RegisterConnection(wsConn); err != nil {
-		log.Printf("Failed to register connection: %v", err)
+		log.Printf("ERROR: Failed to register connection: %v", err)
 		_ = wsConn.Close()
 		return
 	}
+	log.Printf("SUCCESS: Connection registered successfully - userID: %s, role: %s, sessionID: %s", userID, role, sessionID)
 	
 	// Send session history in background
 	// ARCHITECTURAL DISCOVERY: Asynchronous history replay prevents blocking
@@ -213,8 +215,10 @@ func (h *Handler) handleConnection(conn *Connection) {
 		// Clean up connection from registry and close resources
 		// FUNCTIONAL DISCOVERY: Deferred cleanup ensures resources are released
 		// even if connection handling panics or exits unexpectedly
+		log.Printf("DEBUG: Unregistering connection - userID: %s, role: %s, sessionID: %s", conn.GetUserID(), conn.GetRole(), conn.GetSessionID())
 		h.registry.UnregisterConnection(conn)
 		_ = conn.Close()
+		log.Printf("DEBUG: Connection cleanup complete - userID: %s", conn.GetUserID())
 	}()
 	
 	// Set up ping/pong heartbeat monitoring

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -200,6 +201,40 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, sessionID st
 
 // FUNCTIONAL DISCOVERY: DELETE /api/sessions/{id} - End session
 func (s *Server) endSession(w http.ResponseWriter, r *http.Request, sessionID string) {
+	log.Printf("DEBUG: endSession() called for sessionID: %s", sessionID)
+	
+	// Notify all connected clients before ending the session
+	connections := s.registry.GetSessionConnections(sessionID)
+	log.Printf("DEBUG: GetSessionConnections() returned %d connections for session %s", len(connections), sessionID)
+	
+	if len(connections) > 0 {
+		sessionEndedMsg := map[string]interface{}{
+			"type":    "system",
+			"context": "session_ended",
+			"content": map[string]interface{}{
+				"event":  "session_ended",
+				"reason": "Session ended by instructor",
+			},
+		}
+		
+		log.Printf("DEBUG: Prepared session_ended message: %+v", sessionEndedMsg)
+		
+		// Send session_ended message to all connected clients
+		successCount := 0
+		for i, conn := range connections {
+			log.Printf("DEBUG: Attempting to send session_ended to connection %d", i)
+			if err := conn.WriteJSON(sessionEndedMsg); err != nil {
+				log.Printf("ERROR: Failed to send session_ended to client %d: %v", i, err)
+			} else {
+				successCount++
+				log.Printf("DEBUG: Successfully sent session_ended to connection %d", i)
+			}
+		}
+		log.Printf("SUCCESS: Sent session_ended message to %d/%d connected clients", successCount, len(connections))
+	} else {
+		log.Printf("WARNING: No connections found for session %s - cannot send session_ended message", sessionID)
+	}
+	
 	err := s.sessionManager.EndSession(r.Context(), sessionID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
