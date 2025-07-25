@@ -413,6 +413,7 @@ Content-Type: application/json
 Request Body:
 {
   "name": "Math Class - Chapter 5",
+  "instructor_id": "instructor1",
   "student_ids": ["student1", "student2", "student3"]
 }
 
@@ -424,7 +425,7 @@ Response: 201 Created
 }
 
 Errors:
-400 Bad Request - Invalid input data, duplicate student IDs removed automatically
+400 Bad Request - Invalid input data (missing name, instructor_id, or student_ids), duplicate student IDs removed automatically
 500 Internal Server Error - Database error
 ```
 
@@ -479,7 +480,7 @@ Response: 200 OK
       "created_by": "instructor1", 
       "status": "active",
       "created_at": "2025-07-23T14:30:00Z",
-      "connected_clients": 15
+      "connection_count": 15
     }
   ],
   "total_count": 1
@@ -556,7 +557,7 @@ Heartbeat Protocol:
 }
 
 Note: Server generates message ID and timestamp
-Context defaults to "general" if not provided
+Context field defaults to "general" when empty or omitted
 ```
 
 **Outgoing Message (Server to Client)**
