@@ -1,0 +1,13 @@
+{
+  "user_id": "user-name-consistent-with-teacher-client",
+  "name": "Agent Name",
+  "expertise": "Short Description of Expertise",
+  "description": "List of expertise",
+  "response_style": "style of response",
+  "switchboard_url": "http://localhost:8080",
+  "gemini_api_key": "YOUR_GEMINI_KEY",
+  "gemini_model": "gemini-2.0-flash",
+  "gemini_temperature": 0.6,
+  "gemini_max_output_tokens": 300,
+  "prompt_template": "You are {name}, an AI expert specialized in {expertise}. Your response style is {response_style}.\n\nStudent problem: {problem}\n{code_context}Time: {time_on_task}min, Frustration: {frustration_level}/5\n\nAdditional prompt..."
+}
