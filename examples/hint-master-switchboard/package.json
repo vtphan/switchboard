@@ -1,0 +1,46 @@
+{
+  "name": "hint-master-switchboard",
+  "version": "2.0.0",
+  "description": "AI Programming Mentorship using Switchboard for real-time expert hints with session management",
+  "main": "teacher-client/server.js",
+  "scripts": {
+    "start": "echo 'Starting AI Programming Mentorship with Switchboard...' && npm run teacher",
+    "teacher": "cd teacher-client && node server.js",
+    "expert": "cd student-client && node switchboard-expert.js --config",
+    "start-all-experts": "cd student-client && ./start-all-experts.sh",
+    "health": "curl -s http://localhost:8080/health || echo 'Switchboard server not running on port 8080'",
+    "setup-keys": "./setup-api-keys.sh"
+  },
+  "keywords": [
+    "switchboard",
+    "real-time",
+    "websocket",
+    "ai",
+    "gemini",
+    "demo",
+    "programming",
+    "mentorship"
+  ],
+  "author": "Switchboard Demo",
+  "license": "MIT",
+  "dependencies": {
+    "@google/generative-ai": "^0.15.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "ws": "^8.16.0",
+    "node-fetch": "^3.3.2",
+    "yargs": "^17.7.2",
+    "chalk": "^4.1.2",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/switchboard-demo"
+  }
+}

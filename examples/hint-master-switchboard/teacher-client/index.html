@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Programming Mentorship - Switchboard Teacher Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🎓 AI Programming Mentorship</h1>
+            <p class="subtitle">Switchboard Teacher Dashboard - Manage sessions and broadcast problems to AI experts</p>
+            <div class="connection-status" id="connectionStatus">
+                <span class="status-indicator" id="statusIndicator">🔴</span>
+                <span id="statusText">Not connected</span>
+            </div>
+        </header>
+
+        <!-- Session Management Panel -->
+        <div class="session-panel" id="sessionPanel">
+            <div class="card">
+                <h2>🏫 Session Management</h2>
+                
+                <div class="session-controls">
+                    <div class="form-group">
+                        <label for="sessionName">Session Name</label>
+                        <input 
+                            type="text" 
+                            id="sessionName" 
+                            placeholder="AI Programming Mentorship Session"
+                            value="AI Programming Mentorship Session"
+                        />
+                    </div>
+                    
+                    <div class="button-group">
+                        <button id="createSessionBtn" class="primary-btn">
+                            🆕 Create New Session
+                        </button>
+                        <button id="listSessionsBtn" class="secondary-btn">
+                            📋 List Active Sessions
+                        </button>
+                        <button id="endSessionBtn" class="danger-btn" disabled>
+                            🛑 End Current Session
+                        </button>
+                    </div>
+                </div>
+
+                <div class="current-session" id="currentSession" style="display: none;">
+                    <h3>Current Session</h3>
+                    <div class="session-info">
+                        <div class="session-detail">
+                            <strong>Session ID:</strong> <span id="currentSessionId">-</span>
+                        </div>
+                        <div class="session-detail">
+                            <strong>Name:</strong> <span id="currentSessionName">-</span>
+                        </div>
+                        <div class="session-detail">
+                            <strong>Created:</strong> <span id="currentSessionCreated">-</span>
+                        </div>
+                        <div class="session-detail">
+                            <strong>Enrolled Experts:</strong> <span id="enrolledExperts">5</span>
+                        </div>
+                        <div class="session-detail">
+                            <strong>Connected Experts:</strong> <span id="connectedExperts">0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="session-list" id="sessionList" style="display: none;">
+                    <h3>Active Sessions</h3>
+                    <div id="sessionsContainer">
+                        <!-- Dynamic session list -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content" id="mainContent" style="display: none;">
+            <!-- Left Panel: Problem Configuration -->
+            <div class="left-panel">
+                <div class="card">
+                    <h2>📝 Problem Configuration</h2>
+                    
+                    <!-- Problem Description -->
+                    <div class="form-group">
+                        <label for="problemDescription">Problem Description</label>
+                        <textarea 
+                            id="problemDescription" 
+                            placeholder="Describe the programming problem the student is working on..."
+                            rows="4"
+                        ></textarea>
+                    </div>
+
+                    <!-- Code Snapshot -->
+                    <div class="form-group">
+                        <label for="codeSnapshot">Code Snapshot</label>
+                        <div class="code-input-wrapper">
+                            <textarea 
+                                id="codeSnapshot" 
+                                placeholder="Paste your code here...
+// Example:
+function calculateTotal(items) {
+    let total = 0;
+    for (let i = 0; i < items.length; i++) {
+        total += items[i].price * items[i].quantity;
+    }
+    return total;
+}"
+                                rows="12"
+                            ></textarea>
+                            <div id="codePreview" class="code-preview" style="display: none;">
+                                <pre><code class="language-javascript" id="highlightedCode"></code></pre>
+                            </div>
+                            <div class="code-controls">
+                                <button type="button" id="togglePreview" class="toggle-btn">👁️ Preview</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Time Information -->
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="timeOnTask">Time on Task (minutes)</label>
+                            <input 
+                                type="number" 
+                                id="timeOnTask" 
+                                min="0" 
+                                max="180" 
+                                placeholder="15"
+                                value="15"
+                            >
+                        </div>
+                        <div class="form-group">
+                            <label for="remainingTime">Remaining Time (minutes)</label>
+                            <input 
+                                type="number" 
+                                id="remainingTime" 
+                                min="0" 
+                                max="180" 
+                                placeholder="30"
+                                value="30"
+                            >
+                        </div>
+                    </div>
+
+                    <!-- Frustration Level -->
+                    <div class="form-group">
+                        <label for="frustrationLevel">
+                            Frustration Level: <span id="frustrationValue">2</span>/5
+                        </label>
+                        <div class="frustration-slider">
+                            <input 
+                                type="range" 
+                                id="frustrationLevel" 
+                                min="0" 
+                                max="5" 
+                                value="2"
+                            >
+                            <div class="frustration-labels">
+                                <span>0<br><small>Can struggle</small></span>
+                                <span>1<br><small>Mild concern</small></span>
+                                <span>2<br><small>Some stress</small></span>
+                                <span>3<br><small>Frustrated</small></span>
+                                <span>4<br><small>Very stuck</small></span>
+                                <span>5<br><small>Need help now</small></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Broadcast Button -->
+                    <button id="broadcastBtn" class="broadcast-btn" disabled>
+                        📢 Broadcast to AI Experts
+                    </button>
+
+                    <div class="broadcast-status" id="broadcastStatus"></div>
+                </div>
+
+            </div>
+
+            <!-- Right Panel: Individual Expert Panels -->
+            <div class="right-panel">
+                <div class="experts-grid" id="expertsGrid">
+                    <!-- Technical Expert Panel -->
+                    <div class="expert-panel technical-expert" id="panel-technical_expert">
+                        <div class="expert-header">
+                            <h3>🧠 Technical Expert</h3>
+                            <span class="connection-status disconnected" id="status-technical_expert">●</span>
+                        </div>
+                        <div class="expert-details">
+                            <p class="expertise">algorithmic optimization, code efficiency, performance analysis</p>
+                            <div class="metrics">
+                                <span class="hint-count" id="count-technical_expert">0 hints</span>
+                                <span class="response-time" id="time-technical_expert">~0s response</span>
+                            </div>
+                        </div>
+                        <div class="latest-hint" id="latest-technical_expert" style="display: none;">
+                            <div class="hint-meta">
+                                <span class="timestamp" id="timestamp-technical_expert"></span>
+                                <button class="copy-btn" onclick="copyHint('technical_expert')">📋</button>
+                            </div>
+                            <p class="hint-content" id="content-technical_expert"></p>
+                        </div>
+                        <details class="hint-history" id="history-technical_expert">
+                            <summary>Previous hints (<span id="history-count-technical_expert">0</span>)</summary>
+                            <div class="history-list" id="history-list-technical_expert"></div>
+                        </details>
+                        <div class="no-hints" id="empty-technical_expert">
+                            <p>🚀 Waiting for hints...</p>
+                        </div>
+                    </div>
+
+                    <!-- Emotional Support Coach Panel -->
+                    <div class="expert-panel emotional-support" id="panel-emotional_support_coach">
+                        <div class="expert-header">
+                            <h3>💖 Emotional Support Coach</h3>
+                            <span class="connection-status disconnected" id="status-emotional_support_coach">●</span>
+                        </div>
+                        <div class="expert-details">
+                            <p class="expertise">emotional intelligence, motivation, stress management</p>
+                            <div class="metrics">
+                                <span class="hint-count" id="count-emotional_support_coach">0 hints</span>
+                                <span class="response-time" id="time-emotional_support_coach">~0s response</span>
+                            </div>
+                        </div>
+                        <div class="latest-hint" id="latest-emotional_support_coach" style="display: none;">
+                            <div class="hint-meta">
+                                <span class="timestamp" id="timestamp-emotional_support_coach"></span>
+                                <button class="copy-btn" onclick="copyHint('emotional_support_coach')">📋</button>
+                            </div>
+                            <p class="hint-content" id="content-emotional_support_coach"></p>
+                        </div>
+                        <details class="hint-history" id="history-emotional_support_coach">
+                            <summary>Previous hints (<span id="history-count-emotional_support_coach">0</span>)</summary>
+                            <div class="history-list" id="history-list-emotional_support_coach"></div>
+                        </details>
+                        <div class="no-hints" id="empty-emotional_support_coach">
+                            <p>💖 Waiting for hints...</p>
+                        </div>
+                    </div>
+
+                    <!-- Debugging Guru Panel -->
+                    <div class="expert-panel debugging-guru" id="panel-debugging_guru">
+                        <div class="expert-header">
+                            <h3>🔍 Debugging Guru</h3>
+                            <span class="connection-status disconnected" id="status-debugging_guru">●</span>
+                        </div>
+                        <div class="expert-details">
+                            <p class="expertise">error detection, debugging strategies, testing methodologies</p>
+                            <div class="metrics">
+                                <span class="hint-count" id="count-debugging_guru">0 hints</span>
+                                <span class="response-time" id="time-debugging_guru">~0s response</span>
+                            </div>
+                        </div>
+                        <div class="latest-hint" id="latest-debugging_guru" style="display: none;">
+                            <div class="hint-meta">
+                                <span class="timestamp" id="timestamp-debugging_guru"></span>
+                                <button class="copy-btn" onclick="copyHint('debugging_guru')">📋</button>
+                            </div>
+                            <p class="hint-content" id="content-debugging_guru"></p>
+                        </div>
+                        <details class="hint-history" id="history-debugging_guru">
+                            <summary>Previous hints (<span id="history-count-debugging_guru">0</span>)</summary>
+                            <div class="history-list" id="history-list-debugging_guru"></div>
+                        </details>
+                        <div class="no-hints" id="empty-debugging_guru">
+                            <p>🔍 Waiting for hints...</p>
+                        </div>
+                    </div>
+
+                    <!-- Learning Coach Panel -->
+                    <div class="expert-panel learning-coach" id="panel-learning_coach">
+                        <div class="expert-header">
+                            <h3>📚 Learning Coach</h3>
+                            <span class="connection-status disconnected" id="status-learning_coach">●</span>
+                        </div>
+                        <div class="expert-details">
+                            <p class="expertise">conceptual understanding, teaching methodologies, knowledge scaffolding</p>
+                            <div class="metrics">
+                                <span class="hint-count" id="count-learning_coach">0 hints</span>
+                                <span class="response-time" id="time-learning_coach">~0s response</span>
+                            </div>
+                        </div>
+                        <div class="latest-hint" id="latest-learning_coach" style="display: none;">
+                            <div class="hint-meta">
+                                <span class="timestamp" id="timestamp-learning_coach"></span>
+                                <button class="copy-btn" onclick="copyHint('learning_coach')">📋</button>
+                            </div>
+                            <p class="hint-content" id="content-learning_coach"></p>
+                        </div>
+                        <details class="hint-history" id="history-learning_coach">
+                            <summary>Previous hints (<span id="history-count-learning_coach">0</span>)</summary>
+                            <div class="history-list" id="history-list-learning_coach"></div>
+                        </details>
+                        <div class="no-hints" id="empty-learning_coach">
+                            <p>📚 Waiting for hints...</p>
+                        </div>
+                    </div>
+
+                    <!-- Architecture Expert Panel -->
+                    <div class="expert-panel architecture-expert" id="panel-architecture_expert">
+                        <div class="expert-header">
+                            <h3>🏗️ Architecture Expert</h3>
+                            <span class="connection-status disconnected" id="status-architecture_expert">●</span>
+                        </div>
+                        <div class="expert-details">
+                            <p class="expertise">software architecture, design patterns, code organization</p>
+                            <div class="metrics">
+                                <span class="hint-count" id="count-architecture_expert">0 hints</span>
+                                <span class="response-time" id="time-architecture_expert">~0s response</span>
+                            </div>
+                        </div>
+                        <div class="latest-hint" id="latest-architecture_expert" style="display: none;">
+                            <div class="hint-meta">
+                                <span class="timestamp" id="timestamp-architecture_expert"></span>
+                                <button class="copy-btn" onclick="copyHint('architecture_expert')">📋</button>
+                            </div>
+                            <p class="hint-content" id="content-architecture_expert"></p>
+                        </div>
+                        <details class="hint-history" id="history-architecture_expert">
+                            <summary>Previous hints (<span id="history-count-architecture_expert">0</span>)</summary>
+                            <div class="history-list" id="history-list-architecture_expert"></div>
+                        </details>
+                        <div class="no-hints" id="empty-architecture_expert">
+                            <p>🏗️ Waiting for hints...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Problem Summary -->
+                <div class="card problem-summary" id="problemSummary" style="display: none;">
+                    <h3>📊 Current Problem</h3>
+                    <div class="problem-details">
+                        <div class="detail-item">
+                            <strong>Time on Task:</strong> <span id="summaryTimeOnTask">-</span> min
+                        </div>
+                        <div class="detail-item">
+                            <strong>Remaining:</strong> <span id="summaryRemainingTime">-</span> min
+                        </div>
+                        <div class="detail-item">
+                            <strong>Frustration:</strong> <span id="summaryFrustration">-</span>/5
+                        </div>
+                        <div class="detail-item">
+                            <strong>Broadcasted:</strong> <span id="summaryTimestamp">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Session History -->
+                <div class="card session-history" id="sessionHistory" style="display: none;">
+                    <h3>📚 Session History</h3>
+                    <div class="history-container" id="historyContainer">
+                        <p>Session history will appear here after connecting...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="switchboard-client.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
