@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>💡 Hint Master - Teacher Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>💡 Hint Master</h1>
+            <div class="connection-status disconnected" id="connectionStatus">
+                <span class="status-indicator" id="statusIndicator">🔴</span>
+                <span id="statusText">Not connected</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content" id="mainContent">
+            <!-- Expert Panels - Only show connected experts -->
+            <div class="experts-container">
+                <div class="experts-grid" id="expertsGrid">
+                    <!-- Expert panels will be generated dynamically for connected experts only -->
+                </div>
+            </div>
+
+            <!-- Problem Configuration -->
+            <div class="problem-config">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>📝 Problem Configuration</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="problemDescription">Problem Description</label>
+                            <textarea 
+                                id="problemDescription" 
+                                placeholder="Describe the programming problem the student is facing..."
+                                rows="3"
+                            ></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="codeSnapshot">Code Snapshot (Optional)</label>
+                            <textarea 
+                                id="codeSnapshot" 
+                                placeholder="Paste student's current code here..."
+                                rows="6"
+                            ></textarea>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="timeOnTask">Time on Task (min)</label>
+                                <input type="number" id="timeOnTask" value="7" min="0" max="180">
+                            </div>
+                            <div class="form-group">
+                                <label for="remainingTime">Remaining Time (min)</label>
+                                <input type="number" id="remainingTime" value="8" min="0" max="180">
+                            </div>
+                            <div class="form-group">
+                                <label for="frustrationLevel">Frustration: <span id="frustrationValue">2</span>/5</label>
+                                <input type="range" id="frustrationLevel" min="1" max="5" value="2">
+                            </div>
+                        </div>
+                        <button id="broadcastBtn" class="primary-btn" disabled>
+                            📢 Broadcast Problem to Experts
+                        </button>
+                        <div class="broadcast-status" id="broadcastStatus"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Session Management -->
+            <div class="session-panel">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>🏫 Session Management</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="sessionName">Session Name</label>
+                            <input type="text" id="sessionName" value="Hint Master Session">
+                        </div>
+                        <div class="button-group">
+                            <button id="createSessionBtn" class="primary-btn">Create Session</button>
+                            <button id="listSessionsBtn" class="secondary-btn">List Sessions</button>
+                            <button id="endSessionBtn" class="danger-btn" disabled>End Session</button>
+                        </div>
+                        <div class="current-session" id="currentSession" style="display: none;">
+                            <div class="session-info">
+                                <span><strong>Session ID:</strong> <span id="currentSessionId">-</span></span>
+                                <span><strong>Experts Connected:</strong> <span id="connectedExperts">0</span>/<span id="totalExperts">6</span></span>
+                            </div>
+                        </div>
+                        <div class="session-list" id="sessionList" style="display: none;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                <h3>Active Sessions</h3>
+                                <button class="secondary-btn" onclick="document.getElementById('sessionList').style.display='none'">Hide</button>
+                            </div>
+                            <div id="sessionsContainer"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load the browser-compatible SDK -->
+    <script src="switchboard-sdk.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
