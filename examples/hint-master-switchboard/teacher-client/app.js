@@ -1,16 +1,35 @@
 // AI Programming Mentorship - Switchboard Teacher Client Application
-// Integrates with Switchboard instead of custom WebSocket server
+// Direct Switchboard integration without wrapper classes
 
 class TeacherApp {
   constructor() {
-    this.client = new TeacherSwitchboardClient();
+    // Switchboard connection settings
+    this.switchboardUrl = 'http://localhost:8080';
+    this.instructorId = 'teacher_001';
+    this.ws = null;
+    this.connected = false;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
+    
+    // Session and expert management
     this.currentSession = null;
-    this.connectedExperts = new Set();
+    this.expertIds = [
+      'technical_expert',
+      'emotional_support_coach', 
+      'debugging_guru',
+      'learning_coach',
+      'architecture_expert'
+    ];
+    
+    // UI state
     this.hintsReceived = [];
-    this.expertStatusMap = new Map();
+    this.lastBroadcastTime = null;
+    
+    // Consolidated expert state
+    this.experts = new Map();
+    this.initializeExperts();
     
     this.initializeEventListeners();
-    this.initializeExpertStatusTracking();
   }
 
   initializeEventListeners() {
@@ -22,7 +41,6 @@ class TeacherApp {
     // Problem configuration
     document.getElementById('broadcastBtn').addEventListener('click', () => this.broadcastProblem());
     document.getElementById('frustrationLevel').addEventListener('input', this.updateFrustrationValue);
-    document.getElementById('togglePreview').addEventListener('click', this.toggleCodePreview);
 
     // Form validation
     const requiredFields = ['problemDescription', 'codeSnapshot'];
@@ -30,29 +48,13 @@ class TeacherApp {
       document.getElementById(fieldId).addEventListener('input', this.validateForm);
     });
 
-    // Switchboard client event handlers
-    this.client.onHint((hint) => this.handleHintReceived(hint));
-    this.client.onExpertConnectionChange((message) => this.handleExpertConnection(message));
-    this.client.onError((error) => this.handleError(error));
-    
-    // Set up client event handlers for UI updates
-    this.client.onHistoryLoaded = () => this.handleHistoryLoaded();
-    this.client.onReconnected = () => this.updateConnectionStatus('connected', 'Connected to session');
-    this.client.onReconnectionFailed = () => this.updateConnectionStatus('error', 'Failed to reconnect');
   }
 
-  initializeExpertStatusTracking() {
-    // Initialize expert status map
-    const expertNames = [
-      'technical_expert',
-      'emotional_support_coach', 
-      'debugging_guru',
-      'learning_coach',
-      'architecture_expert'
-    ];
-
-    expertNames.forEach(id => {
-      this.expertStatusMap.set(id, {
+  initializeExperts() {
+    // Initialize consolidated expert state
+    this.expertIds.forEach(id => {
+      this.experts.set(id, {
+        id: id,
         name: this.formatExpertName(id),
         connected: false,
         lastSeen: null,
@@ -61,6 +63,9 @@ class TeacherApp {
         averageResponseTime: 0,
         responseTimes: []
       });
+      
+      // Initialize UI state - start all as disconnected
+      this.updateExpertPanelStatus(id, false);
     });
   }
 
@@ -75,23 +80,39 @@ class TeacherApp {
     return names[expertId] || expertId;
   }
 
-  // Session Management
+  // Session Management - Direct Switchboard integration
   async createSession() {
     try {
       this.updateConnectionStatus('connecting', 'Creating session...');
       const sessionName = document.getElementById('sessionName').value || 'AI Programming Mentorship Session';
       
-      const session = await this.client.createSession(sessionName);
-      this.currentSession = session;
+      // Create session via Switchboard API
+      const response = await fetch(`${this.switchboardUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: sessionName,
+          instructor_id: this.instructorId,
+          student_ids: this.expertIds
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create session: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      this.currentSession = data.session;
+      console.log(`✅ Session created: ${data.session.id}`);
       
-      // Connect to the session
-      await this.client.connectToSession(session.id);
+      // Connect to the session via WebSocket
+      await this.connectToSession(data.session.id);
       
-      this.updateSessionDisplay(session);
+      this.updateSessionDisplay(data.session);
       this.showMainContent();
-      this.updateConnectionStatus('connected', `Connected to session: ${session.id.substring(0, 8)}...`);
+      this.updateConnectionStatus('connected', `Connected to session: ${data.session.id.substring(0, 8)}...`);
       
-      console.log('✅ Session created and connected:', session.id);
+      console.log('✅ Session created and connected:', data.session.id);
     } catch (error) {
       console.error('❌ Failed to create session:', error);
       this.updateConnectionStatus('error', 'Failed to create session');
@@ -101,8 +122,14 @@ class TeacherApp {
 
   async listSessions() {
     try {
-      const sessions = await this.client.listActiveSessions();
-      this.displaySessionList(sessions);
+      const response = await fetch(`${this.switchboardUrl}/api/sessions`);
+      if (!response.ok) {
+        throw new Error(`Failed to list sessions: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      const activeSessions = data.sessions.filter(s => s.status === 'active');
+      this.displaySessionList(activeSessions);
     } catch (error) {
       console.error('❌ Failed to list sessions:', error);
       alert('Failed to list sessions: ' + error.message);
@@ -113,8 +140,17 @@ class TeacherApp {
     if (!this.currentSession) return;
     
     try {
-      await this.client.endSession();
-      await this.client.disconnect();
+      // End session via Switchboard API
+      const response = await fetch(`${this.switchboardUrl}/api/sessions/${this.currentSession.id}`, {
+        method: 'DELETE'
+      });
+
+      if (response.ok) {
+        console.log(`✅ Session ${this.currentSession.id} ended`);
+      }
+      
+      // Disconnect WebSocket
+      this.disconnect();
       
       this.currentSession = null;
       this.hideMainContent();
@@ -132,17 +168,20 @@ class TeacherApp {
     try {
       this.updateConnectionStatus('connecting', 'Connecting to session...');
       
-      await this.client.connectToSession(sessionId);
+      await this.connectToSession(sessionId);
       
       // Get session details
-      const sessions = await this.client.listActiveSessions();
-      const session = sessions.find(s => s.id === sessionId);
-      
-      if (session) {
-        this.currentSession = session;
-        this.updateSessionDisplay(session);
-        this.showMainContent();
-        this.updateConnectionStatus('connected', `Connected to session: ${sessionId.substring(0, 8)}...`);
+      const response = await fetch(`${this.switchboardUrl}/api/sessions`);
+      if (response.ok) {
+        const data = await response.json();
+        const session = data.sessions.find(s => s.id === sessionId);
+        
+        if (session) {
+          this.currentSession = session;
+          this.updateSessionDisplay(session);
+          this.showMainContent();
+          this.updateConnectionStatus('connected', `Connected to session: ${sessionId.substring(0, 8)}...`);
+        }
       }
     } catch (error) {
       console.error('❌ Failed to connect to session:', error);
@@ -151,16 +190,188 @@ class TeacherApp {
     }
   }
 
+  // WebSocket Connection Management
+  async connectToSession(sessionId) {
+    try {
+      const wsUrl = `ws://localhost:8080/ws?user_id=${this.instructorId}&role=instructor&session_id=${sessionId}`;
+      
+      this.ws = new WebSocket(wsUrl);
+
+      return new Promise((resolve, reject) => {
+        this.ws.onopen = () => {
+          this.connected = true;
+          this.reconnectAttempts = 0;
+          console.log(`🔗 Connected to session: ${sessionId}`);
+          resolve();
+        };
+
+        this.ws.onmessage = (event) => {
+          console.log('🔍 DEBUG: Raw WebSocket message received:', event.data);
+          try {
+            const message = JSON.parse(event.data);
+            console.log('🔍 DEBUG: Parsed message:', message);
+            this.handleMessage(message);
+          } catch (error) {
+            console.error('❌ Failed to parse WebSocket message:', error, event.data);
+          }
+        };
+
+        this.ws.onclose = () => {
+          this.connected = false;
+          console.log('🔌 WebSocket connection closed');
+          if (this.currentSession) {
+            this.attemptReconnection();
+          }
+        };
+
+        this.ws.onerror = (error) => {
+          console.error('❌ WebSocket error:', error);
+          this.connected = false;
+          reject(error);
+        };
+
+        // Connection timeout
+        setTimeout(() => {
+          if (!this.connected) {
+            reject(new Error('Connection timeout'));
+          }
+        }, 10000);
+      });
+    } catch (error) {
+      console.error('❌ Failed to connect to session:', error);
+      throw error;
+    }
+  }
+
+  disconnect() {
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.connected = false;
+  }
+
+  async attemptReconnection() {
+    this.reconnectAttempts++;
+    const delay = Math.pow(2, this.reconnectAttempts) * 1000; // Exponential backoff
+    
+    console.log(`🔄 Reconnecting in ${delay/1000}s (attempt ${this.reconnectAttempts})`);
+    
+    setTimeout(async () => {
+      try {
+        await this.connectToSession(this.currentSession.id);
+        this.updateConnectionStatus('connected', 'Connected to session');
+      } catch (error) {
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.attemptReconnection();
+        } else {
+          this.updateConnectionStatus('error', 'Failed to reconnect');
+        }
+      }
+    }, delay);
+  }
+
+  // Message Handling - Direct Switchboard protocol
+  handleMessage(message) {
+    switch (message.type) {
+      case 'instructor_inbox':
+        if (message.context === 'hint') {
+          this.handleHintReceived(message);
+        } else if (message.context === 'error') {
+          this.handleExpertError(message);
+        }
+        break;
+        
+      case 'analytics':
+        if (message.context === 'connection') {
+          this.handleExpertConnection(message);
+        }
+        break;
+        
+      case 'system':
+        this.handleSystemMessage(message);
+        break;
+        
+      default:
+        console.log('📨 Received message:', message);
+    }
+  }
+
+  handleHintReceived(message) {
+    // Robust hint object construction with fallbacks
+    const expertName = message.content?.expert?.name || message.from_user || 'Unknown Expert';
+    const expertExpertise = message.content?.expert?.expertise || 'General';
+    const hintContent = message.content?.hint || 'No hint content';
+    
+    const hint = {
+      type: 'hint_received',
+      expert: {
+        name: expertName,
+        expertise: expertExpertise,
+      },
+      hint: hintContent,
+      timestamp: message.timestamp || new Date().toISOString(),
+      problemContext: message.content?.problemContext
+    };
+
+    console.log(`💡 Hint from ${hint.expert.name}: ${hint.hint.substring(0, 50)}...`);
+    
+    this.hintsReceived.push(hint);
+    
+    // Determine expert ID from the hint
+    const expertId = this.getExpertIdFromHint(hint);
+    
+    if (expertId) {
+      this.displayHintInExpertPanel(expertId, hint);
+      this.updateExpertMetrics(expertId, hint);
+    } else {
+      console.warn('⚠️ Could not map hint to expert panel:', hint.expert.name);
+    }
+  }
+
+  handleExpertError(message) {
+    console.log(`⚠️ Expert error from ${message.from_user}: ${message.content.error}`);
+  }
+
+  handleSystemMessage(message) {
+    const event = message.content.event;
+    
+    switch (event) {
+      case 'history_complete':
+        console.log('📚 Message history loaded');
+        this.handleHistoryLoaded();
+        break;
+        
+      case 'message_error':
+        console.error('❌ Message error:', message.content.error);
+        break;
+        
+      case 'session_ended':
+        console.log('🛑 Session ended by system');
+        this.disconnect();
+        this.currentSession = null;
+        this.hideMainContent();
+        this.updateConnectionStatus('disconnected', 'Session ended');
+        break;
+    }
+  }
+
   // UI Updates
   updateSessionDisplay(session) {
     document.getElementById('currentSessionId').textContent = session.id;
-    document.getElementById('currentSessionName').textContent = session.name;
-    document.getElementById('currentSessionCreated').textContent = new Date(session.start_time).toLocaleString();
     document.getElementById('enrolledExperts').textContent = '5';
-    document.getElementById('connectedExperts').textContent = this.connectedExperts.size;
+    document.getElementById('connectedExperts').textContent = this.getConnectedExpertCount();
     
     document.getElementById('currentSession').style.display = 'block';
     document.getElementById('endSessionBtn').disabled = false;
+  }
+
+  getConnectedExpertCount() {
+    let count = 0;
+    this.experts.forEach(expert => {
+      if (expert.connected) count++;
+    });
+    return count;
   }
 
   displaySessionList(sessions) {
@@ -185,7 +396,7 @@ class TeacherApp {
   }
 
   showMainContent() {
-    document.getElementById('mainContent').style.display = 'grid';
+    document.getElementById('mainContent').style.display = 'flex';
     this.validateForm();
   }
 
@@ -219,16 +430,14 @@ class TeacherApp {
     const expertId = message.from_user;
     const event = message.content.event;
     
-    if (this.expertStatusMap.has(expertId)) {
-      const expert = this.expertStatusMap.get(expertId);
+    if (this.experts.has(expertId)) {
+      const expert = this.experts.get(expertId);
       
       if (event === 'connected' || event === 'session_joined') {
         expert.connected = true;
         expert.lastSeen = new Date();
-        this.connectedExperts.add(expertId);
       } else if (event === 'disconnected') {
         expert.connected = false;
-        this.connectedExperts.delete(expertId);
       }
       
       this.updateExpertPanelStatus(expertId, expert.connected);
@@ -238,6 +447,8 @@ class TeacherApp {
 
   updateExpertPanelStatus(expertId, connected) {
     const statusElement = document.getElementById(`status-${expertId}`);
+    const panelElement = document.getElementById(`panel-${expertId}`);
+    
     if (statusElement) {
       if (connected) {
         statusElement.className = 'connection-status connected';
@@ -245,18 +456,25 @@ class TeacherApp {
         statusElement.className = 'connection-status disconnected';
       }
     }
+    
+    if (panelElement) {
+      if (connected) {
+        panelElement.classList.remove('disconnected');
+      } else {
+        panelElement.classList.add('disconnected');
+      }
+    }
   }
 
   updateConnectedExpertsCount() {
     const countElement = document.getElementById('connectedExperts');
     if (countElement) {
-      countElement.textContent = this.connectedExperts.size;
+      countElement.textContent = this.getConnectedExpertCount();
     }
   }
 
   resetExpertStatus() {
-    this.connectedExperts.clear();
-    this.expertStatusMap.forEach((expert, expertId) => {
+    this.experts.forEach((expert, expertId) => {
       expert.connected = false;
       expert.lastSeen = null;
       this.updateExpertPanelStatus(expertId, false);
@@ -266,7 +484,7 @@ class TeacherApp {
 
   // Problem Broadcasting
   async broadcastProblem() {
-    if (!this.client.connected) {
+    if (!this.connected) {
       alert('Not connected to a session');
       return;
     }
@@ -283,12 +501,20 @@ class TeacherApp {
       // Track broadcast time for response time calculation
       this.lastBroadcastTime = new Date();
       
-      this.client.broadcastProblem(problemData);
+      // Send problem broadcast via WebSocket
+      const message = {
+        type: 'instructor_broadcast',
+        context: 'problem',
+        content: problemData,
+        timestamp: new Date().toISOString()
+      };
+
+      this.ws.send(JSON.stringify(message));
+      
       this.displayBroadcastConfirmation(problemData);
-      this.updateProblemSummary(problemData);
       this.clearHintsFromPanels(); // Clear previous hints for new problem
       
-      console.log('📢 Problem broadcasted to experts');
+      console.log(`📢 Problem broadcasted to ${this.expertIds.length} experts`);
     } catch (error) {
       console.error('❌ Failed to broadcast problem:', error);
       alert('Failed to broadcast problem: ' + error.message);
@@ -299,7 +525,7 @@ class TeacherApp {
     const statusElement = document.getElementById('broadcastStatus');
     statusElement.innerHTML = `
       <div class="broadcast-success">
-        ✅ Problem broadcasted to ${this.connectedExperts.size} connected experts
+        ✅ Problem broadcasted to ${this.getConnectedExpertCount()} connected experts
         <div class="broadcast-time">Sent at ${new Date().toLocaleTimeString()}</div>
       </div>
     `;
@@ -310,37 +536,23 @@ class TeacherApp {
     }, 5000);
   }
 
-  updateProblemSummary(problemData) {
-    document.getElementById('summaryTimeOnTask').textContent = problemData.timeOnTask;
-    document.getElementById('summaryRemainingTime').textContent = problemData.remainingTime;
-    document.getElementById('summaryFrustration').textContent = problemData.frustrationLevel;
-    document.getElementById('summaryTimestamp').textContent = new Date().toLocaleString();
-    
-    document.getElementById('problemSummary').style.display = 'block';
-  }
 
-  // Hint Management
-  handleHintReceived(hint) {
-    this.hintsReceived.push(hint);
-    
-    // Determine expert ID from the hint
-    const expertId = this.getExpertIdFromHint(hint);
-    if (expertId) {
-      this.displayHintInExpertPanel(expertId, hint);
-      this.updateExpertMetrics(expertId, hint);
-    }
-    
-    console.log(`💡 Hint received from ${hint.expert.name}`);
-  }
 
   getExpertIdFromHint(hint) {
-    // Map expert names to IDs
+    // Map expert names to IDs (both display names and user IDs)
     const nameToId = {
+      // Display names
       'Technical Expert': 'technical_expert',
       'Emotional Support Coach': 'emotional_support_coach',
       'Debugging Guru': 'debugging_guru',
       'Learning Coach': 'learning_coach',
-      'Architecture Expert': 'architecture_expert'
+      'Architecture Expert': 'architecture_expert',
+      // User IDs (fallback)
+      'technical_expert': 'technical_expert',
+      'emotional_support_coach': 'emotional_support_coach',
+      'debugging_guru': 'debugging_guru',
+      'learning_coach': 'learning_coach',
+      'architecture_expert': 'architecture_expert'
     };
     
     return nameToId[hint.expert.name] || null;
@@ -368,7 +580,7 @@ class TeacherApp {
   }
 
   addToExpertHistory(expertId, hint) {
-    const expert = this.expertStatusMap.get(expertId);
+    const expert = this.experts.get(expertId);
     if (expert) {
       // Move current hint to history if it exists
       if (expert.hintHistory.length > 0 || document.getElementById(`latest-${expertId}`).style.display !== 'none') {
@@ -399,7 +611,7 @@ class TeacherApp {
   }
 
   updateExpertHistoryDisplay(expertId) {
-    const expert = this.expertStatusMap.get(expertId);
+    const expert = this.experts.get(expertId);
     if (!expert || expert.hintHistory.length === 0) return;
 
     const historyList = document.getElementById(`history-list-${expertId}`);
@@ -418,7 +630,7 @@ class TeacherApp {
   }
 
   updateExpertMetrics(expertId, hint) {
-    const expert = this.expertStatusMap.get(expertId);
+    const expert = this.experts.get(expertId);
     if (expert) {
       expert.hintCount++;
       
@@ -476,7 +688,7 @@ class TeacherApp {
       }
       
       // Reset expert metrics
-      const expert = this.expertStatusMap.get(expertId);
+      const expert = this.experts.get(expertId);
       if (expert) {
         expert.hintCount = 0;
         expert.hintHistory = [];
@@ -514,32 +726,6 @@ class TeacherApp {
     valueDisplay.textContent = slider.value;
   }
 
-  toggleCodePreview() {
-    const textarea = document.getElementById('codeSnapshot');
-    const preview = document.getElementById('codePreview');
-    const button = document.getElementById('togglePreview');
-    
-    if (preview.style.display === 'none') {
-      // Show preview
-      const code = textarea.value;
-      
-      document.getElementById('highlightedCode').textContent = code;
-      document.getElementById('highlightedCode').className = 'language-javascript';
-      
-      if (typeof hljs !== 'undefined') {
-        hljs.highlightAll();
-      }
-      
-      textarea.style.display = 'none';
-      preview.style.display = 'block';
-      button.textContent = '✏️ Edit';
-    } else {
-      // Show textarea
-      textarea.style.display = 'block';
-      preview.style.display = 'none';
-      button.textContent = '👁️ Preview';
-    }
-  }
 
   // Copy hint to clipboard
   copyHint(expertId) {
@@ -564,9 +750,7 @@ class TeacherApp {
 
   // History and System Message Handling
   handleHistoryLoaded() {
-    document.getElementById('sessionHistory').style.display = 'block';
-    const historyContainer = document.getElementById('historyContainer');
-    historyContainer.innerHTML = '<p>✅ Session history loaded. Previous messages will appear above as you interact.</p>';
+    console.log('✅ Session history loaded');
   }
 
   handleError(error) {
