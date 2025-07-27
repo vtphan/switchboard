@@ -630,6 +630,11 @@ func TestManager_StatisticsAndCacheManagement(t *testing.T) {
 	dbManager := newMockDatabaseManager()
 	manager := NewManager(dbManager)
 	
+	// Clean up the manager goroutine
+	t.Cleanup(func() {
+		_ = manager.Close()
+	})
+	
 	ctx := context.Background()
 	
 	// Initially empty
@@ -638,21 +643,37 @@ func TestManager_StatisticsAndCacheManagement(t *testing.T) {
 		t.Errorf("Expected 0 active sessions initially, got %v", stats["active_sessions"])
 	}
 	
-	// Create sessions
-	_, err := manager.CreateSession(ctx, "Session 1", "instructor1", []string{"student1"})
+	// Create first session
+	session1, err := manager.CreateSession(ctx, "Session 1", "instructor1", []string{"student1"})
 	if err != nil {
 		t.Fatalf("CreateSession 1 failed: %v", err)
 	}
 	
+	// Try to create second session - should fail due to single session enforcement
 	_, err = manager.CreateSession(ctx, "Session 2", "instructor1", []string{"student2"})
-	if err != nil {
-		t.Fatalf("CreateSession 2 failed: %v", err)
+	if err == nil {
+		t.Fatal("Expected CreateSession 2 to fail due to single session enforcement")
+	}
+	if err != ErrActiveSessionExists {
+		t.Errorf("Expected ErrActiveSessionExists, got: %v", err)
 	}
 	
-	// Check statistics
+	// Check statistics - should be 1 active session
 	stats = manager.GetStats()
-	if stats["active_sessions"] != 2 {
-		t.Errorf("Expected 2 active sessions, got %v", stats["active_sessions"])
+	if stats["active_sessions"] != 1 {
+		t.Errorf("Expected 1 active session, got %v", stats["active_sessions"])
+	}
+	
+	// End the first session
+	err = manager.EndSession(ctx, session1.ID)
+	if err != nil {
+		t.Fatalf("EndSession failed: %v", err)
+	}
+	
+	// Now second session should succeed
+	_, err = manager.CreateSession(ctx, "Session 2", "instructor1", []string{"student2"})
+	if err != nil {
+		t.Fatalf("CreateSession 2 after ending first session failed: %v", err)
 	}
 	
 	// Test cache refresh
@@ -661,9 +682,9 @@ func TestManager_StatisticsAndCacheManagement(t *testing.T) {
 		t.Errorf("RefreshCache failed: %v", err)
 	}
 	
-	// Statistics should remain the same
+	// Statistics should show 1 active session (single session enforcement)
 	stats = manager.GetStats()
-	if stats["active_sessions"] != 2 {
-		t.Errorf("Expected 2 active sessions after refresh, got %v", stats["active_sessions"])
+	if stats["active_sessions"] != 1 {
+		t.Errorf("Expected 1 active session after refresh, got %v", stats["active_sessions"])
 	}
 }

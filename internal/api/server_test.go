@@ -354,6 +354,17 @@ func (m *mockSessionManager) ValidateSessionMembership(sessionID, userID, role s
 	return nil
 }
 
+// New methods for single session enforcement
+func (m *mockSessionManager) HasActiveSession(ctx context.Context) (bool, error) {
+	// Mock no active session initially for tests to pass
+	return false, nil
+}
+
+func (m *mockSessionManager) GetActiveSession(ctx context.Context) (*types.Session, error) {
+	// Mock no active session initially for tests to pass
+	return nil, nil
+}
+
 type mockDatabaseManager struct{}
 
 func (m *mockDatabaseManager) CreateSession(ctx context.Context, session *types.Session) error {
@@ -438,4 +449,17 @@ func (m *mockRegistry) GetSessionStudents(sessionID string) []*websocket.Connect
 
 func (m *mockRegistry) GetStats() map[string]int {
 	return m.stats
+}
+
+func (m *mockRegistry) BroadcastToUsers(userIDs []string, message interface{}) {
+	// Mock implementation - not used in tests
+}
+
+// New methods for auto-transition (Phase 4)
+func (m *mockRegistry) GetLobbyConnections() []*websocket.Connection {
+	return []*websocket.Connection{}
+}
+
+func (m *mockRegistry) TransitionUserToSession(userID, sessionID string) error {
+	return nil
 }

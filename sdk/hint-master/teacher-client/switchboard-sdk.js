@@ -186,14 +186,35 @@
     }
 
     handleSystemMessage(message) {
-      if (message.content.event === 'history_complete') {
+      // LOBBY SYSTEM: Handle new system message types
+      const event = message.context;
+      
+      if (event === 'history_complete') {
         this.emit('historyComplete');
-      } else if (message.content.event === 'message_error') {
+      } else if (event === 'message_error') {
         this.emit('messageError', message.content);
-      } else if (message.content.event === 'session_started') {
+      } else if (event === 'session_started') {
         this.emit('sessionStarted', message.content);
-      } else if (message.content.event === 'session_ended') {
-        this.emit('sessionEnded', message.content);
+      } else if (event === 'session_left') {
+        // Don't disconnect - return to lobby state
+        this.currentSessionId = null;
+        this.emit('sessionLeft', message.content);
+      } else if (event === 'presence_update') {
+        // Handle unified presence updates (replaces user_connected/disconnected/connection_replaced)
+        const userId = message.content.user_id;
+        const sessionId = message.content.session_id;
+        const role = message.content.role;
+        
+        if (sessionId === null) {
+          console.log(`User ${userId} disconnected`);
+          this.emit('userDisconnected', { user_id: userId });
+        } else if (sessionId === 'lobby') {
+          console.log(`User ${userId} (${role}) in lobby`);
+          this.emit('userConnected', { user_id: userId, role: role, session_id: sessionId });
+        } else {
+          console.log(`User ${userId} (${role}) joined session ${sessionId}`);
+          this.emit('userConnected', { user_id: userId, role: role, session_id: sessionId });
+        }
       }
       
       // Always emit generic system event

@@ -1,15 +1,19 @@
 package router
 
 import (
+	"context"
+	"log"
 	"sync"
 	"time"
 )
 
 // RateLimiter implements per-client rate limiting
-// ARCHITECTURAL DISCOVERY: Per-client state tracking with proper cleanup prevents memory leaks
+// MEMORY LEAK FIX: Auto-cleanup prevents memory leaks from disconnected clients
 type RateLimiter struct {
-	mu      sync.RWMutex
-	clients map[string]*ClientLimit
+	mu           sync.RWMutex
+	clients      map[string]*ClientLimit
+	stopCleanup  chan struct{}
+	cleanupDone  sync.WaitGroup
 }
 
 // ClientLimit tracks rate limiting for a single client
@@ -19,23 +23,99 @@ type ClientLimit struct {
 	windowStart  time.Time
 }
 
-// NewRateLimiter creates a new rate limiter
-// FUNCTIONAL DISCOVERY: Initialize map to prevent nil pointer access during concurrent operations
+// NewRateLimiter creates a new rate limiter with automatic cleanup
+// MEMORY LEAK FIX: Start background cleanup goroutine to prevent memory leaks
 func NewRateLimiter() *RateLimiter {
-	return &RateLimiter{
-		clients: make(map[string]*ClientLimit),
+	rl := &RateLimiter{
+		clients:     make(map[string]*ClientLimit),
+		stopCleanup: make(chan struct{}),
 	}
+	
+	// Start automatic cleanup goroutine
+	rl.cleanupDone.Add(1)
+	go rl.autoCleanup()
+	
+	return rl
+}
+
+// NewRateLimiterWithContext creates a rate limiter with context-controlled cleanup
+// CONTEXT SUPPORT: Allow external context to control cleanup lifecycle
+func NewRateLimiterWithContext(ctx context.Context) *RateLimiter {
+	rl := &RateLimiter{
+		clients:     make(map[string]*ClientLimit),
+		stopCleanup: make(chan struct{}),
+	}
+	
+	// Start cleanup with context support
+	rl.cleanupDone.Add(1)
+	go rl.autoCleanupWithContext(ctx)
+	
+	return rl
 }
 
 // Allow checks if client can send a message (100 per minute limit)
-// TECHNICAL DISCOVERY: RWMutex for read-heavy operations, upgrade to write lock only when needed
+// PERFORMANCE FIX: Use RWMutex pattern - read lock first, upgrade to write lock only when needed
 func (rl *RateLimiter) Allow(userID string) bool {
+	now := time.Now()
+	
+	// First, try with read lock for existing clients
+	rl.mu.RLock()
+	limit, exists := rl.clients[userID]
+	if exists {
+		// Check if we can proceed with just read lock (window hasn't expired and under limit)
+		if now.Sub(limit.windowStart) < time.Minute && limit.messageCount < 100 {
+			rl.mu.RUnlock()
+			
+			// Upgrade to write lock for the increment
+			rl.mu.Lock()
+			defer rl.mu.Unlock()
+			
+			// Recheck after acquiring write lock (double-checked locking pattern)
+			if now.Sub(limit.windowStart) < time.Minute && limit.messageCount < 100 {
+				limit.messageCount++
+				return true
+			}
+			// Fall through to handle window reset or rate limit exceeded
+			if now.Sub(limit.windowStart) >= time.Minute {
+				limit.messageCount = 1
+				limit.windowStart = now
+				return true
+			}
+			return false // Rate limit exceeded
+		}
+		
+		// Window expired, need write lock for reset
+		if now.Sub(limit.windowStart) >= time.Minute {
+			rl.mu.RUnlock()
+			rl.mu.Lock()
+			defer rl.mu.Unlock()
+			
+			// Recheck after acquiring write lock
+			if now.Sub(limit.windowStart) >= time.Minute {
+				limit.messageCount = 1
+				limit.windowStart = now
+				return true
+			}
+			// Window was reset by another goroutine, check limit
+			if limit.messageCount < 100 {
+				limit.messageCount++
+				return true
+			}
+			return false
+		}
+		
+		// Rate limit exceeded
+		rl.mu.RUnlock()
+		return false
+	}
+	rl.mu.RUnlock()
+	
+	// New client - need write lock
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	
-	now := time.Now()
-	
-	limit, exists := rl.clients[userID]
+	// Double-check after acquiring write lock
+	limit, exists = rl.clients[userID]
 	if !exists {
 		// FUNCTIONAL DISCOVERY: First message always allowed, initialize tracking
 		rl.clients[userID] = &ClientLimit{
@@ -45,15 +125,13 @@ func (rl *RateLimiter) Allow(userID string) bool {
 		return true
 	}
 	
-	// Check if new minute window needed
-	// TECHNICAL DISCOVERY: Sliding window resets exactly every minute for consistent rate limiting
+	// Client was added by another goroutine, apply normal logic
 	if now.Sub(limit.windowStart) >= time.Minute {
 		limit.messageCount = 1
 		limit.windowStart = now
 		return true
 	}
 	
-	// Check rate limit (100 messages per minute)
 	if limit.messageCount >= 100 {
 		return false
 	}
@@ -62,7 +140,7 @@ func (rl *RateLimiter) Allow(userID string) bool {
 	return true
 }
 
-// Cleanup removes old client entries (call periodically)
+// Cleanup removes old client entries (manual cleanup)
 // ARCHITECTURAL DISCOVERY: Prevent memory leaks by removing stale client state
 // after 5 minutes of inactivity (5x the rate limit window)
 func (rl *RateLimiter) Cleanup() {
@@ -70,9 +148,60 @@ func (rl *RateLimiter) Cleanup() {
 	defer rl.mu.Unlock()
 	
 	now := time.Now()
+	removedCount := 0
 	for userID, limit := range rl.clients {
 		if now.Sub(limit.windowStart) > 5*time.Minute {
 			delete(rl.clients, userID)
+			removedCount++
 		}
 	}
+	
+	if removedCount > 0 {
+		log.Printf("Rate limiter cleanup: removed %d stale client entries", removedCount)
+	}
+}
+
+// autoCleanup runs automatic cleanup every 5 minutes
+// MEMORY LEAK FIX: Background cleanup prevents unlimited memory growth
+func (rl *RateLimiter) autoCleanup() {
+	defer rl.cleanupDone.Done()
+	
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ticker.C:
+			rl.Cleanup()
+		case <-rl.stopCleanup:
+			return
+		}
+	}
+}
+
+// autoCleanupWithContext runs automatic cleanup with context cancellation support
+// CONTEXT SUPPORT: Respect external context for graceful shutdown
+func (rl *RateLimiter) autoCleanupWithContext(ctx context.Context) {
+	defer rl.cleanupDone.Done()
+	
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ticker.C:
+			rl.Cleanup()
+		case <-ctx.Done():
+			return
+		case <-rl.stopCleanup:
+			return
+		}
+	}
+}
+
+// Stop gracefully stops the rate limiter and cleanup goroutine
+// RESOURCE CLEANUP: Ensure proper cleanup goroutine termination
+func (rl *RateLimiter) Stop() {
+	close(rl.stopCleanup)
+	rl.cleanupDone.Wait()
 }

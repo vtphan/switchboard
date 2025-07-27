@@ -105,10 +105,16 @@ func (h *Hub) Stop() error {
 	return nil
 }
 
-// SendMessage queues a message for routing
+// SendMessage queues a message for routing with context-aware timeout
+// CONTEXT FIX: Add timeout to prevent indefinite blocking when channel is full
+func (h *Hub) SendMessage(message *types.Message, senderID string) error {
+	return h.SendMessageWithContext(context.Background(), message, senderID)
+}
+
+// SendMessageWithContext queues a message for routing with context support
 // FUNCTIONAL DISCOVERY: Message context extraction ensures proper routing
 // even when sender information is not embedded in message payload
-func (h *Hub) SendMessage(message *types.Message, senderID string) error {
+func (h *Hub) SendMessageWithContext(ctx context.Context, message *types.Message, senderID string) error {
 	h.mu.RLock()
 	if !h.running {
 		h.mu.RUnlock()
@@ -131,19 +137,27 @@ func (h *Hub) SendMessage(message *types.Message, senderID string) error {
 		Timestamp: time.Now(),
 	}
 	
-	// TECHNICAL DISCOVERY: Non-blocking send with error handling prevents hub lockup
+	// CONTEXT FIX: Context-aware channel send with timeout prevents indefinite blocking
 	select {
 	case h.messageChannel <- messageCtx:
 		return nil
-	default:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(5 * time.Second):
 		return ErrMessageChannelFull
 	}
 }
 
-// RegisterConnection queues a connection for registration
+// RegisterConnection queues a connection for registration with context support
+// CONTEXT FIX: Add timeout to prevent indefinite blocking during registration
+func (h *Hub) RegisterConnection(conn *websocket.Connection) error {
+	return h.RegisterConnectionWithContext(context.Background(), conn)
+}
+
+// RegisterConnectionWithContext queues a connection for registration with context support
 // FUNCTIONAL DISCOVERY: Asynchronous registration prevents blocking
 // WebSocket handler during connection establishment
-func (h *Hub) RegisterConnection(conn *websocket.Connection) error {
+func (h *Hub) RegisterConnectionWithContext(ctx context.Context, conn *websocket.Connection) error {
 	h.mu.RLock()
 	if !h.running {
 		h.mu.RUnlock()
@@ -151,18 +165,27 @@ func (h *Hub) RegisterConnection(conn *websocket.Connection) error {
 	}
 	h.mu.RUnlock()
 	
+	// CONTEXT FIX: Context-aware channel send with timeout
 	select {
 	case h.registerChannel <- conn:
 		return nil
-	default:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(5 * time.Second):
 		return ErrRegisterChannelFull
 	}
 }
 
-// UnregisterConnection queues a connection for deregistration
+// UnregisterConnection queues a connection for deregistration with context support
+// CONTEXT FIX: Add timeout to prevent indefinite blocking during deregistration
+func (h *Hub) UnregisterConnection(userID string) error {
+	return h.UnregisterConnectionWithContext(context.Background(), userID)
+}
+
+// UnregisterConnectionWithContext queues a connection for deregistration with context support
 // ARCHITECTURAL DISCOVERY: User ID-based deregistration enables cleanup
 // even when connection object is no longer available
-func (h *Hub) UnregisterConnection(userID string) error {
+func (h *Hub) UnregisterConnectionWithContext(ctx context.Context, userID string) error {
 	h.mu.RLock()
 	if !h.running {
 		h.mu.RUnlock()
@@ -170,10 +193,13 @@ func (h *Hub) UnregisterConnection(userID string) error {
 	}
 	h.mu.RUnlock()
 	
+	// CONTEXT FIX: Context-aware channel send with timeout
 	select {
 	case h.unregisterChannel <- userID:
 		return nil
-	default:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(5 * time.Second):
 		return ErrUnregisterChannelFull
 	}
 }

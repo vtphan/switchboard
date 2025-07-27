@@ -4,8 +4,6 @@ import (
 	"log"
 	"sync"
 	"time"
-
-	"switchboard/pkg/types"
 )
 
 // Registry manages WebSocket connections with thread-safe operations
@@ -16,6 +14,7 @@ type Registry struct {
 	globalConnections   map[string]*Connection                // userID -> Connection for O(1) global lookup
 	sessionInstructors  map[string]map[string]*Connection     // sessionID -> userID -> Connection
 	sessionStudents     map[string]map[string]*Connection     // sessionID -> userID -> Connection
+	broadcastWG         sync.WaitGroup                        // For testing: wait for async broadcasts to complete
 }
 
 // NewRegistry creates a new connection registry
@@ -47,34 +46,25 @@ func (r *Registry) RegisterConnection(conn *Connection) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	
-	// FUNCTIONAL DISCOVERY: Send session_ended message to trigger graceful client shutdown
-	// instead of forced connection close to prevent reconnection loops
-	if existingConn, exists := r.globalConnections[userID]; exists {
-		go func() {
-			// Send session_ended message to old connection
-			sessionEndedMsg := &types.Message{
-				Type:    "system",
-				Context: "session_ended",
-				Content: map[string]interface{}{
-					"reason": "Connection replaced by new instance",
-				},
-				Timestamp: time.Now(),
-			}
-			
-			// Send message to trigger graceful client shutdown
-			if err := existingConn.WriteJSON(sessionEndedMsg); err != nil {
-				log.Printf("Failed to send session_ended to replaced connection: %v", err)
-			} else {
-				log.Printf("Sent session_ended message to replaced connection for user %s", userID)
-			}
-			
-			// DON'T close connection - let client handle shutdown gracefully
-			// If client doesn't respond, session cleanup will handle zombie connections
-		}()
+	// RACE CONDITION FIX: Atomic connection replacement prevents race between
+	// existence check and replacement notification
+	var existingConn *Connection
+	if oldConn, exists := r.globalConnections[userID]; exists {
+		existingConn = oldConn
 	}
 	
-	// Add to global map for O(1) user lookup
+	// Atomically replace connection first to prevent race conditions
 	r.globalConnections[userID] = conn
+	
+	// Notify old connection after atomic replacement
+	if existingConn != nil {
+		// SIMPLIFIED: Just close the old connection directly
+		// The UnregisterConnection will send presence_update for disconnection
+		log.Printf("Replacing existing connection for user %s", userID)
+		go existingConn.Close()
+	}
+	
+	// Connection already added to global map above (line 59)
 	
 	// Add to appropriate session-role map for efficient recipient lookup
 	switch role {
@@ -89,6 +79,58 @@ func (r *Registry) RegisterConnection(conn *Connection) error {
 		}
 		r.sessionStudents[sessionID][userID] = conn
 	}
+	
+	// LOBBY SYSTEM: Send simplified presence update to all users
+	r.broadcastWG.Add(1)
+	go func() {
+		defer r.broadcastWG.Done()
+		
+		// Broadcast unified presence_update event to all existing users
+		presenceUpdateMsg := map[string]interface{}{
+			"type": "system",
+			"content": map[string]interface{}{
+				"event":      "presence_update",
+				"user_id":    userID,
+				"role":       role,
+				"session_id": sessionID,
+			},
+			"timestamp": time.Now(),
+		}
+		r.BroadcastToAll(presenceUpdateMsg)
+		log.Printf("Broadcast presence_update event for user %s joining session %s", userID, sessionID)
+		
+		// 2. Send current user list to the new connection (so they know who's already online)
+		if sessionID == "lobby" {
+			r.mu.RLock()
+			var currentUsers []map[string]interface{}
+			for existingUserID, existingConn := range r.globalConnections {
+				if existingUserID != userID && existingConn.GetSessionID() == "lobby" {
+					currentUsers = append(currentUsers, map[string]interface{}{
+						"user_id":    existingUserID,
+						"role":       existingConn.GetRole(),
+						"session_id": existingConn.GetSessionID(),
+					})
+				}
+			}
+			r.mu.RUnlock()
+			
+			if len(currentUsers) > 0 {
+				presenceMsg := map[string]interface{}{
+					"type":    "system",
+					"context": "lobby_users",
+					"content": map[string]interface{}{
+						"users":     currentUsers,
+						"timestamp": time.Now(),
+					},
+				}
+				if err := conn.WriteJSON(presenceMsg); err != nil {
+					log.Printf("Failed to send lobby users to new connection %s: %v", userID, err)
+				} else {
+					log.Printf("Sent lobby users list to new user %s (%d users)", userID, len(currentUsers))
+				}
+			}
+		}
+	}()
 	
 	return nil
 }
@@ -140,6 +182,24 @@ func (r *Registry) UnregisterConnection(conn *Connection) {
 			}
 		}
 	}
+	
+	// LOBBY SYSTEM: Broadcast simplified presence update when user disconnects
+	r.broadcastWG.Add(1)
+	go func() {
+		defer r.broadcastWG.Done()
+		presenceUpdateMsg := map[string]interface{}{
+			"type": "system",
+			"content": map[string]interface{}{
+				"event":      "presence_update",
+				"user_id":    userID,
+				"role":       registeredConn.GetRole(),
+				"session_id": nil, // null indicates disconnection
+			},
+			"timestamp": time.Now(),
+		}
+		r.BroadcastToAll(presenceUpdateMsg)
+		log.Printf("Broadcast presence_update event for user %s disconnection", userID)
+	}()
 }
 
 // GetUserConnection returns the current connection for a user with O(1) lookup
@@ -244,4 +304,137 @@ func (r *Registry) GetStats() map[string]int {
 		"total_connections": len(r.globalConnections),
 		"active_sessions":   len(uniqueSessions),
 	}
+}
+
+// LOBBY SYSTEM: Methods for lobby-wide broadcasting and presence management
+
+// GetAllConnections returns all connected users
+// FUNCTIONAL DISCOVERY: Enables system-wide broadcasts for lobby functionality
+func (r *Registry) GetAllConnections() []*Connection {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	var connections []*Connection
+	for _, conn := range r.globalConnections {
+		connections = append(connections, conn)
+	}
+	
+	return connections
+}
+
+// GetLobbyConnections returns users not in any active session
+// FUNCTIONAL DISCOVERY: Returns users in lobby state (sessionID == "lobby")
+func (r *Registry) GetLobbyConnections() []*Connection {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	var connections []*Connection
+	for _, conn := range r.globalConnections {
+		if conn.GetSessionID() == "lobby" {
+			connections = append(connections, conn)
+		}
+	}
+	
+	return connections
+}
+
+// BroadcastToAll sends message to all connected users
+// ARCHITECTURAL DISCOVERY: System-wide broadcasting for presence and session events
+func (r *Registry) BroadcastToAll(message interface{}) {
+	r.mu.RLock()
+	connections := make([]*Connection, 0, len(r.globalConnections))
+	for _, conn := range r.globalConnections {
+		connections = append(connections, conn)
+	}
+	r.mu.RUnlock()
+	
+	// Send to all connections
+	successCount := 0
+	for _, conn := range connections {
+		if err := conn.WriteJSON(message); err != nil {
+			log.Printf("Failed to broadcast message to user %s: %v", conn.GetUserID(), err)
+		} else {
+			successCount++
+		}
+	}
+	
+	log.Printf("Broadcast message sent to %d/%d connected users", successCount, len(connections))
+}
+
+// BroadcastToUsers sends message to specific users by ID
+// FUNCTIONAL DISCOVERY: Targeted broadcasting for session-specific events
+func (r *Registry) BroadcastToUsers(userIDs []string, message interface{}) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	successCount := 0
+	for _, userID := range userIDs {
+		if conn, exists := r.globalConnections[userID]; exists {
+			if err := conn.WriteJSON(message); err != nil {
+				log.Printf("Failed to send message to user %s: %v", userID, err)
+			} else {
+				successCount++
+			}
+		}
+	}
+	
+	log.Printf("Targeted message sent to %d/%d specified users", successCount, len(userIDs))
+}
+
+// WaitForBroadcasts waits for all async broadcast operations to complete
+// TESTING SUPPORT: Use this in tests to ensure broadcasts finish before verification
+func (r *Registry) WaitForBroadcasts() {
+	r.broadcastWG.Wait()
+}
+
+// TransitionUserToSession moves a user from lobby to a specific session
+// PHASE 4 DISCOVERY: Atomic operation to prevent connection state inconsistencies
+func (r *Registry) TransitionUserToSession(userID, sessionID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	// Find user in global connections
+	conn, exists := r.globalConnections[userID]
+	if !exists {
+		return nil // User not connected, no error
+	}
+	
+	role := conn.GetRole()
+	currentSessionID := conn.GetSessionID()
+	
+	// Only transition from lobby
+	if currentSessionID != "lobby" {
+		return nil // User not in lobby, no transition needed
+	}
+	
+	// Remove from lobby
+	if role == "student" {
+		if lobbyStudents, exists := r.sessionStudents["lobby"]; exists {
+			delete(lobbyStudents, userID)
+		}
+	} else if role == "instructor" {
+		if lobbyInstructors, exists := r.sessionInstructors["lobby"]; exists {
+			delete(lobbyInstructors, userID)
+		}
+	}
+	
+	// Add to target session
+	if role == "student" {
+		if r.sessionStudents[sessionID] == nil {
+			r.sessionStudents[sessionID] = make(map[string]*Connection)
+		}
+		r.sessionStudents[sessionID][userID] = conn
+	} else if role == "instructor" {
+		if r.sessionInstructors[sessionID] == nil {
+			r.sessionInstructors[sessionID] = make(map[string]*Connection)
+		}
+		r.sessionInstructors[sessionID][userID] = conn
+	}
+	
+	// Update connection's session ID
+	conn.SetSessionID(sessionID)
+	
+	log.Printf("DEBUG: Transitioned user %s (%s) from lobby to session %s", userID, role, sessionID)
+	
+	return nil
 }

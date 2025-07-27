@@ -3,22 +3,20 @@
 ## 1. Overview
 
 ### 1.1 Purpose
-Switchboard is a real-time communication component that facilitates structured communication between students and instructors within session-based contexts. It enforces a **single active session architecture** for simplified classroom management, providing persistent lobby connections for instant session discovery and seamless transitions between lobby and session states.
+Switchboard is a real-time communication component that facilitates structured communication between students and instructors within session-based contexts. Switchboard supports various communication patterns including broadcasts, direct messaging, and analytics data collection.
 
 ### 1.2 Design Principles
-- **Single Session Enforcement**: Only one session can be active at any time for simplified management
-- **Seamless Transitions**: Automatic assignment and transition between lobby and session states
-- **Real-Time**: WebSocket-based for immediate message delivery and presence updates
-- **Teacher-Friendly**: Clear conflict resolution and session lifecycle management
-- **Persistence**: Session messages stored for history replay and audit
+- **Simplicity**: Minimal architecture focused solely on message routing
+- **Session-Centric**: All communication occurs within defined educational sessions
+- **Real-Time**: WebSocket-based for immediate message delivery
+- **Persistence**: All messages stored for history replay and audit
 - **Go Concurrency**: Leverages goroutines and channels for scalable concurrent processing
-- **Auto-Assignment**: Students and instructors automatically assigned to appropriate sessions
-- **Unified Presence**: Single event model for all connection state changes
+- **Immutable Sessions**: Sessions cannot be modified after creation for predictable behavior
+- **Opinionated Decisions**: Simple, predictable behavior over flexibility
 
 ### 1.3 Non-Goals
 - User authentication (handled by client applications)
 - User authorization beyond session membership validation
-- Multiple concurrent active sessions
 - Complex error recovery mechanisms
 - Offline message queuing
 - Session modification after creation
@@ -29,21 +27,12 @@ Switchboard is a real-time communication component that facilitates structured c
 The switchboard determines user roles through WebSocket connection context:
 
 **Connection Process:**
-1. Client connects with role declared in URL: 
-   - Session: `ws://host/ws?user_id=user123&role=instructor&session_id=abc123`
-   - Lobby: `ws://host/ws?user_id=user123&role=student&session_id=lobby`
-   - Auto-assignment: `ws://host/ws?user_id=user123&role=student` (no session_id)
-2. **Auto-Assignment Logic** (when session_id is empty):
-   - If active session exists and user belongs to it → Auto-assign to session
-   - **Students**: Auto-assigned if in active session's `student_ids` list
-   - **Instructors**: Auto-assigned to any active session (universal access)
-   - **Fallback**: Assigned to lobby if no active session or not enrolled
-3. Switchboard validates role against session membership (if joining specific session):
+1. Client connects with role declared in URL: `ws://host/ws?user_id=user123&role=instructor&session_id=abc123`
+2. Switchboard validates role against session membership:
    - **Students**: Must be in session's `student_ids` list
    - **Instructors**: Universal access to all sessions
-   - **Lobby**: No session validation required
-4. Role and session state stored in connection context for message routing and presence
-5. Authentication and role assignment are handled by upstream components
+3. Role is stored in client connection context and used for all future message routing
+4. Authentication and role assignment are handled by upstream components
 
 **Security Model:**
 - Switchboard trusts the declared role from authenticated clients
@@ -80,10 +69,9 @@ The switchboard determines user roles through WebSocket connection context:
 - Broadcasts presence updates system-wide
 
 **Session Manager**
-- Enforces single active session constraint
-- Manages session lifecycle (create, end) with conflict detection
+- Loads active sessions at startup
+- Manages session lifecycle (create, end)
 - Validates session membership
-- Provides active session lookup for auto-assignment
 - Enforces session immutability
 
 **Message Router**
@@ -92,10 +80,9 @@ The switchboard determines user roles through WebSocket connection context:
 - Applies role-based permissions
 
 **Connection Manager**
-- Tracks active connections in lobby and single active session
+- Tracks active connections across sessions
 - Handles connection replacement and cleanup
 - Provides efficient lookup for message routing
-- Supports auto-transition between lobby and session states
 
 **DB Manager**
 - Single-threaded database operations via goroutine
@@ -156,20 +143,6 @@ Connection States:
 }
 ```
 
-**Auto-Transition Events** (sent to auto-transitioned users):
-```json
-{
-  "type": "system",
-  "content": {
-    "event": "session_transition",
-    "session_id": "xyz",
-    "session_name": "Math Class",
-    "reason": "Auto-transitioned from lobby to session"
-  },
-  "timestamp": "2025-01-01T00:00:00Z"
-}
-```
-
 ```json
 {
   "type": "system", 
@@ -184,12 +157,8 @@ Connection States:
 
 ### 3.4 Implementation Status
 - ✅ Server-side lobby connections supported
-- ✅ Single active session enforcement with HTTP 409 conflict handling
-- ✅ Auto-assignment for new connections without session_id
-- ✅ Auto-transition for lobby users when session is created
 - ✅ Unified presence_update events implemented
 - ✅ Session lifecycle transitions (session_left replaces session_ended)
-- ✅ Auto-transition notifications (session_transition events)
 - ✅ Python and JavaScript SDKs updated
 - ❌ Database constraints prevent lobby message persistence
 - ❌ No lobby-specific message types defined
@@ -223,7 +192,7 @@ Message {
 }
 ```
 
-### 4.3 Client
+### 3.3 Client
 ```
 Client {
   id: string (user_id, 1-50 chars, alphanumeric + underscore/hyphen)
@@ -238,14 +207,12 @@ Client {
 }
 ```
 
-### 4.4 Connection Maps
+### 3.4 Connection Maps
 ```
 ConnectionManager {
   globalConnections: map[string]*Client           // userID -> Client
   sessionInstructors: map[string]map[string]*Client // sessionID -> instructorID -> Client  
   sessionStudents: map[string]map[string]*Client   // sessionID -> studentID -> Client
-  // Note: In single session architecture, only one session is active at a time
-  // Maps contain lobby connections (sessionID="lobby") plus one active session
 }
 ```
 
@@ -300,31 +267,22 @@ Function RouteMessage(message):
 
 ```
 Function CreateSession(instructor_id, session_data):
-  1. Check for existing active session (single session enforcement):
-     - If active session exists: return HTTP 409 Conflict with session details
-  2. Validate session_data:
+  1. Validate session_data:
      - Remove duplicate student_ids
      - Ensure required fields present
-  3. Begin database transaction using channel-based concurrency
-  4. Generate unique session_id (UUID)
-  5. Insert session record to database
-  6. Commit transaction
-  7. Add session to in-memory session_map
-  8. Auto-transition lobby users to session:
-     - Get all lobby connections
-     - For each connection: if user belongs to session, transition to session
-     - Send session_transition notifications to transitioned users
-  9. Broadcast session_started to all enrolled participants
-  10. Return session_id
+  2. Begin database transaction
+  3. Generate unique session_id (UUID)
+  4. Insert session record to database
+  5. Commit transaction
+  6. Add session to in-memory session_map
+  7. Return session_id
 
 Function EndSession(session_id):
-  1. Get session details for participants list
-  2. Broadcast session_left to all enrolled participants
-  3. Get all clients in session from connection maps
-  4. For each client: transition back to lobby (optional cleanup)
-  5. Update session.end_time in database
-  6. Update session.status to "ended"
-  7. Remove session from in-memory session_map
+  1. Get all clients in session from connection maps
+  2. For each client: call CleanupClient(client)
+  3. Update session.end_time in database
+  4. Update session.status to "ended"
+  5. Remove session from in-memory session_map
 ```
 
 ### 5.3 Client Connection Algorithm
@@ -332,31 +290,25 @@ Function EndSession(session_id):
 ```
 Function HandleClientConnection(websocket, user_id, role, session_id):
   1. Validate input parameters (format, length)
-  2. Auto-assignment logic (if session_id is empty):
-     - Check if active session exists
-     - If role == "instructor": auto-assign to active session
-     - If role == "student": auto-assign if user_id in active session's student_ids
-     - If no assignment: assign to "lobby"
-  3. Normalize session_id (empty or "lobby" becomes "lobby" if no auto-assignment)
-  4. If session_id != "lobby":
-       Validate session exists and status == "active"
-       Validate role assignment:
-         If role == "student": Validate user_id in session.student_ids
-         If role == "instructor": Allow connection (universal access)
-  5. If user already connected anywhere:
-       Close old connection (triggers cleanup and presence_update)
-  6. Create new connection object with validated role and session_id
-  7. Register connection with Hub via register channel
-  8. Hub processes registration and updates connection maps atomically
-  9. Broadcast presence_update to all users (user_id, role, session_id)
-  10. If session connection: Send historical messages for session
-      If lobby connection: Send current user presence list
-  11. Start read/write goroutines for connection
-  12. Start heartbeat monitoring
+  2. Validate session exists and status == "active"
+  3. Validate role assignment:
+       If role == "student":
+         Validate user_id in session.student_ids
+       If role == "instructor":
+         Allow connection (instructors have universal session access)
+  4. If user already connected to this session:
+       Send old connection cleanup to Hub via unregister channel
+       Wait for Hub to process cleanup
+  5. Create new client object with validated role
+  6. Send new connection to Hub via register channel
+  7. Hub processes registration and updates connection maps atomically
+  8. Send all historical messages for session to client
+  9. Start read/write goroutines for client
+  10. Start heartbeat monitoring
 
-Note: Auto-assignment enables seamless UX where users don't need to know session IDs.
-Lobby connections require no session validation. Session validation only applies 
-when joining a specific session.
+Note: The switchboard trusts the client's declared role since authentication 
+is handled by upstream components. Role validation occurs only against 
+session membership rules.
 ```
 
 ### 5.4 History Replay Algorithm
@@ -423,50 +375,7 @@ Note: Sender role is determined from the stored role in the client's
 connection context, established during WebSocket connection setup.
 ```
 
-### 5.7 Presence Management Algorithm
-
-```
-Function BroadcastPresenceUpdate(user_id, role, session_id):
-  1. Create presence_update message:
-     {
-       "type": "system",
-       "content": {
-         "event": "presence_update",
-         "user_id": user_id,
-         "role": role,
-         "session_id": session_id  // "lobby", session UUID, or null for disconnect
-       },
-       "timestamp": current_time
-     }
-  2. Broadcast to all connected users via BroadcastToAll()
-  3. Log broadcast result
-
-Function GetCurrentPresence():
-  1. For each connection in globalConnections:
-       Extract user_id, role, session_id
-  2. Return presence list for lobby user initialization
-
-Triggered by:
-- User connects (session_id = their connection state)
-- User changes session (session_id = new session)
-- User disconnects (session_id = null)
-```
-
 ## 6. Concurrency Model
-
-### 6.0 Single Session Concurrency
-
-**Channel-Based Session Operations**
-- Session creation/ending operations serialized through channels
-- Prevents race conditions in single session enforcement
-- Ensures atomic transitions between session states
-
-```go
-type SessionManager struct {
-    sessionOpCh   chan sessionOperation  // Serializes all mutations
-    sessionOpDone chan struct{}          // Clean shutdown signaling
-}
-```
 
 ### 6.1 Goroutine Architecture
 
@@ -498,7 +407,6 @@ hub.unregister: chan *Client
 hub.broadcast: chan Message
 db.write: chan DBOperation
 health.metrics: chan HealthMetric
-session.sessionOpCh: chan sessionOperation  // Single session enforcement
 ```
 
 ### 6.3 Essential Limits
@@ -550,12 +458,6 @@ CREATE INDEX idx_messages_session_time ON messages(session_id, timestamp);
 - **Reads**: Concurrent access (SQLite handles read concurrency well)
 - **Transactions**: Used for atomic session creation/updates
 - **Connection pooling**: Single connection with proper locking
-- **Single Session Queries**: Optimized for single active session lookups
-
-```sql
--- Optimized query for single session architecture
-SELECT * FROM sessions WHERE status = 'active' LIMIT 1;
-```
 
 **Database Error Recovery Algorithm**:
 ```
@@ -591,30 +493,13 @@ Request Body:
 
 Response: 201 Created
 {
-  "session": {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
-    "name": "Math Class - Chapter 5",
-    "created_by": "instructor1",
-    "student_ids": ["student1", "student2", "student3"],
-    "status": "active",
-    "start_time": "2025-07-23T14:30:00Z",
-    "end_time": null
-  }
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "active",
+  "created_at": "2025-07-23T14:30:00Z"
 }
 
 Errors:
 400 Bad Request - Invalid input data (missing name, instructor_id, or student_ids), duplicate student IDs removed automatically
-409 Conflict - Active session already exists (single session enforcement)
-{
-  "error": "Active session exists",
-  "message": "Cannot create new session. Active session 'Previous Class' must be ended first.",
-  "active_session": {
-    "id": "existing-session-id",
-    "name": "Previous Class",
-    "created_by": "instructor2",
-    "status": "active"
-  }
-}
 500 Internal Server Error - Database error
 ```
 
@@ -702,43 +587,26 @@ Errors:
 ```
 WebSocket URL: ws://localhost:8080/ws
 
-Query Parameters:
-- user_id: string (1-50 chars, alphanumeric + underscore/hyphen) **[Required]**
-- role: "student" | "instructor" **[Required]**
-- session_id: string (UUID or "lobby" or empty) **[Optional]**
+Query Parameters (Required):
+- user_id: string (1-50 chars, alphanumeric + underscore/hyphen)
+- role: "student" | "instructor"  
+- session_id: string (UUID)
 
-Examples:
-```
-# Connect to specific session
+Example:
 ws://localhost:8080/ws?user_id=student123&role=student&session_id=550e8400-e29b-41d4-a716-446655440000
-
-# Connect to lobby (explicit)
-ws://localhost:8080/ws?user_id=student123&role=student&session_id=lobby
-
-# Auto-assignment (preferred) - automatically assigned to active session if enrolled, otherwise lobby
-ws://localhost:8080/ws?user_id=student123&role=student
-
-# Instructor auto-assignment - automatically assigned to any active session
-ws://localhost:8080/ws?user_id=instructor1&role=instructor
-```
 
 Connection Process:
 1. Validate query parameters
-2. Auto-assignment logic (if session_id empty):
-   - Check for active session
-   - Auto-assign instructors to any active session
-   - Auto-assign students if enrolled in active session
-   - Fallback to lobby if no active session or not enrolled
-3. If session_id provided and not "lobby": Validate session exists and user permissions
-4. If session_id is "lobby" or fallback: Allow lobby connection
-5. Close any existing connection for same user_id
-6. Send message history (if joining session) or presence list (if joining lobby)
-7. Begin real-time message routing and presence updates
+2. Validate session exists and is active
+3. Validate user permissions (students must be in session's student_ids)
+4. Close any existing connection for same user_id + session_id
+5. Send complete message history for session
+6. Begin real-time message routing
 
 Connection Errors:
 - 400 Bad Request: Missing/invalid query parameters
-- 403 Forbidden: Student not in session's student list (session connections only)
-- 404 Not Found: Session doesn't exist or is ended (session connections only)
+- 403 Forbidden: Student not in session's student list
+- 404 Not Found: Session doesn't exist or is ended
 
 Heartbeat Protocol:
 - Client sends WebSocket ping every 30 seconds  
@@ -749,17 +617,6 @@ Heartbeat Protocol:
 ```
 
 ### 8.4 WebSocket Message Format
-
-**Auto-Assignment Usage Examples:**
-```
-# Student connects - automatically assigned to active session if enrolled
-ws://localhost:8080/ws?user_id=alice&role=student
-# Result: Assigned to active session if alice is in student_ids, otherwise lobby
-
-# Instructor connects - automatically assigned to any active session  
-ws://localhost:8080/ws?user_id=prof_smith&role=instructor
-# Result: Assigned to active session if one exists, otherwise lobby
-```
 
 **Incoming Message (Client to Server)**
 ```json
@@ -795,44 +652,14 @@ Context field defaults to "general" when empty or omitted
 ```
 
 **System Messages**
-
-*Presence Updates (sent to all users):*
 ```json
 {
   "type": "system",
   "content": {
-    "event": "presence_update",
-    "user_id": "student1",
-    "role": "student",
-    "session_id": "lobby"  // or session UUID, or null for disconnection
+    "event": "session_ended",
+    "message": "Session has been ended by instructor"
   },
-  "timestamp": "2025-01-01T00:00:00Z"
-}
-```
-
-*Session Events (sent to enrolled participants):*
-```json
-{
-  "type": "system",
-  "content": {
-    "event": "session_started",
-    "session_id": "xyz",
-    "session_name": "Math Class",
-    "student_ids": ["student1", "student2"]
-  },
-  "timestamp": "2025-01-01T00:00:00Z"
-}
-```
-
-```json
-{
-  "type": "system",
-  "content": {
-    "event": "session_left",
-    "session_id": "xyz",
-    "reason": "Session ended by instructor"
-  },
-  "timestamp": "2025-01-01T00:00:00Z"
+  "timestamp": "2025-07-23T16:45:30Z"
 }
 ```
 
@@ -878,21 +705,17 @@ Context field defaults to "general" when empty or omitted
 
 ### 10.1 Session Rules
 
-- **Single Active Session**: Only one session can have status='active' at any time
 - **Immutable after creation**: No modifications to student_ids after session creation
 - **Instructor privileges**: Any instructor can end any session
 - **Manual termination**: Sessions can only be ended manually via API
-- **Explicit Session Control**: Teachers must end existing session before creating new one
 - **All channels available**: All 6 message types available in every session
 
 ### 10.2 Connection Rules
 
 - **Unique connections**: One connection per user_id per session_id
 - **Connection replacement**: New connection immediately replaces old one
-- **Student validation**: Students must be in session's student_ids list (session connections only)
-- **Instructor access**: Instructors can join any active session (universal access)
-- **Auto-assignment**: Students automatically assigned to active session if enrolled
-- **Lobby fallback**: Users assigned to lobby if no active session or not enrolled
+- **Student validation**: Students must be in session's student_ids list
+- **Instructor access**: Instructors can join any active session
 - **Immediate cleanup**: Disconnections trigger immediate resource cleanup
 
 ### 10.3 Message Rules
@@ -916,7 +739,6 @@ Context field defaults to "general" when empty or omitted
 
 ### 11.1 Design for Classroom Scale
 - **Target**: Typical classroom sizes (20-50 concurrent users per session)
-- **Single Session Benefits**: Eliminates complex multi-session lookups and routing
 - **Approach**: Measure and optimize based on actual usage patterns
 - **Scalability**: Single-server design suitable for individual schools/departments
 
@@ -926,8 +748,6 @@ Context field defaults to "general" when empty or omitted
 - **Immediate cleanup**: Prevent resource leaks through prompt disconnection handling
 - **Efficient routing**: O(1) lookup using connection maps
 - **Single DB writer**: Eliminates write contention
-- **Single Session Optimization**: Simplified lookups and reduced memory usage
-- **Auto-assignment Performance**: < 10ms for session assignment checks
 
 ### 11.3 Monitoring & Optimization
 - **Track actual metrics**: Use /health endpoint for operational visibility
@@ -961,30 +781,4 @@ Context field defaults to "general" when empty or omitted
 - **Logging**: Security events logged for monitoring
 - **No Encryption**: Transport-level security handled externally
 
-## 13. Single Session Architecture Benefits
-
-### 13.1 Simplified Implementation
-- **Reduced Complexity**: Eliminates multi-session coordination and race conditions
-- **Clear Business Logic**: Single active session rule is easy to understand and implement
-- **Simplified Database Queries**: O(1) active session lookups vs O(n) multi-session searches
-- **Predictable Behavior**: Binary session state (active/ended) eliminates edge cases
-
-### 13.2 Enhanced User Experience
-- **Teacher-Friendly**: Clear conflict resolution with helpful error messages
-- **Student Simplicity**: Automatic assignment eliminates session discovery complexity
-- **Seamless Transitions**: Lobby to session movement without reconnection
-- **Real-World Mapping**: Matches actual classroom usage patterns
-
-### 13.3 Operational Benefits
-- **Channel-Based Concurrency**: Go channels ensure atomic session operations
-- **Auto-Assignment Performance**: < 10ms session assignment for 95% of connections
-- **Memory Efficiency**: Constant memory usage vs linear growth with session count
-- **Clear Error Handling**: HTTP 409 conflicts guide proper teacher workflow
-
-### 13.4 Architecture Validation
-- **No Circular Dependencies**: Clean layer separation maintained
-- **Interface Compliance**: All implementations match defined interfaces
-- **Resource Management**: Proper cleanup and leak prevention
-- **Performance Targets**: < 1ms session validation, < 50ms auto-transitions
-
-This design specification provides a complete blueprint for implementing the educational communication switchboard with single session architecture, delivering simplified complexity, enhanced user experience, and optimal performance for real classroom environments.
+This design specification provides a complete blueprint for implementing the educational communication switchboard with all business rules, technical constraints, and operational requirements clearly defined.

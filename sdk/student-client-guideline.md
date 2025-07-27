@@ -8,13 +8,14 @@ This guide provides comprehensive instructions for developing student client app
 
 1. [System Architecture](#system-architecture)
 2. [Student Role Overview](#student-role-overview)
-3. [Session Discovery](#session-discovery)
-4. [WebSocket Connection](#websocket-connection)
-5. [Message Types and Communication Channels](#message-types-and-communication-channels)
-6. [Client Implementation](#client-implementation)
-7. [Best Practices](#best-practices)
-8. [Error Handling](#error-handling)
-9. [Example Implementations](#example-implementations)
+3. [Lobby System](#lobby-system)
+4. [Session Discovery](#session-discovery)
+5. [WebSocket Connection](#websocket-connection)
+6. [Message Types and Communication Channels](#message-types-and-communication-channels)
+7. [Client Implementation](#client-implementation)
+8. [Best Practices](#best-practices)
+9. [Error Handling](#error-handling)
+10. [Example Implementations](#example-implementations)
 
 ## System Architecture
 
@@ -61,6 +62,78 @@ Students do NOT see:
 - Messages between instructors and other students
 - Direct instructor-to-instructor communications
 - Analytics from other students
+
+## Lobby System
+
+### Real-Time Connection Management
+
+Switchboard uses an **implicit lobby system** that provides persistent WebSocket connections and real-time notifications:
+
+#### Key Features
+
+- **Always-On Connections**: Students can connect without requiring an active session
+- **Instant Session Notifications**: Receive immediate alerts when enrolled sessions start
+- **Presence Awareness**: See who's online before sessions begin
+- **Persistent State**: Connections remain active across session transitions
+
+#### Connection States
+
+```
+┌─────────────┐    join session    ┌─────────────┐
+│   LOBBY     │ ───────────────► │ IN SESSION  │
+│ (connected) │ ◄─────────────── │  (active)   │
+└─────────────┘   leave session   └─────────────┘
+```
+
+#### Lobby Benefits for Students
+
+1. **No Polling Delays**: Instant notification when sessions become available
+2. **Seamless Transitions**: Move between sessions without reconnection
+3. **Enhanced UX**: Know when instructors and peers are online
+4. **Automatic Joining**: SDK can auto-join sessions when they start
+
+#### System Messages in Lobby
+
+Students receive real-time system messages:
+
+```javascript
+// User presence updates
+{"type": "system", "context": "user_connected", "content": {"user_id": "instructor1", "role": "instructor"}}
+{"type": "system", "context": "user_disconnected", "content": {"user_id": "student2"}}
+
+// Session lifecycle events  
+{"type": "system", "context": "session_started", "content": {"session_id": "xyz", "student_ids": [...]}}
+{"type": "system", "context": "session_left", "content": {"session_id": "xyz", "reason": "ended"}}
+
+// Connection management
+{"type": "system", "context": "connection_replaced", "content": {"reason": "New connection established"}}
+```
+
+#### Using the Lobby System
+
+**Python SDK Example:**
+```python
+# Connect to lobby first
+await student.connect_to_lobby()
+
+# Register for session notifications
+@student.on_session_available
+async def handle_new_session(session_data):
+    print(f"New session available: {session_data['session_name']}")
+    # SDK auto-joins if student is enrolled
+
+# Handle presence updates
+@student.on_system_message
+async def handle_presence(message):
+    if message.context == "user_connected":
+        print(f"User online: {message.content['user_id']}")
+```
+
+**Connection Flow:**
+1. **Start in Lobby**: `await student.connect_to_lobby()`
+2. **Receive Session Notifications**: Auto-join when sessions start
+3. **Participate in Session**: Normal message exchange
+4. **Return to Lobby**: Stay connected when session ends
 
 ## Session Discovery
 

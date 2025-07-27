@@ -7,13 +7,375 @@ This guide provides comprehensive instructions for developing teacher (instructo
 ## Table of Contents
 
 1. [System Architecture](#system-architecture)
-2. [Session Management](#session-management)
-3. [WebSocket Connection](#websocket-connection)
-4. [Message Types and Communication Channels](#message-types-and-communication-channels)
-5. [Client Implementation](#client-implementation)
-6. [Best Practices](#best-practices)
-7. [Error Handling](#error-handling)
-8. [Example Implementations](#example-implementations)
+2. [Lobby System and Presence Management](#lobby-system-and-presence-management)
+3. [Session Management](#session-management)
+4. [WebSocket Connection](#websocket-connection)
+5. [Message Types and Communication Channels](#message-types-and-communication-channels)
+6. [Client Implementation](#client-implementation)
+7. [Best Practices](#best-practices)
+8. [Error Handling](#error-handling)
+9. [Example Implementations](#example-implementations)
+
+## Lobby System and Presence Management
+
+### Overview
+
+Switchboard implements an **implicit lobby system** that provides persistent connections and real-time presence awareness for all users. When teachers connect to Switchboard, they automatically join a "lobby" where they receive notifications about:
+
+- User connections and disconnections
+- New session creation and availability
+- Session lifecycle events
+- System-wide announcements
+
+This lobby system eliminates the need for polling and provides instant notifications about student availability and session events.
+
+### Key Benefits for Teachers
+
+1. **Real-time Presence Awareness**: Know immediately when students come online or disconnect
+2. **Instant Session Notifications**: Receive immediate alerts when new sessions are created
+3. **Persistent Connections**: Stay connected even when not in active sessions
+4. **Improved Coordination**: Better visibility into student availability for session planning
+5. **Reduced Latency**: Event-driven updates instead of polling-based discovery
+
+### Connection Behavior
+
+#### Lobby Connection
+Teachers can connect to the lobby without specifying a session:
+
+```javascript
+// Connect to lobby for presence awareness
+const wsUrl = 'ws://localhost:8080/ws?user_id=teacher_001&role=instructor';
+const ws = new WebSocket(wsUrl);
+
+// Or connect with explicit lobby parameter
+const wsUrl = 'ws://localhost:8080/ws?user_id=teacher_001&role=instructor&session_id=lobby';
+```
+
+#### Session Connection
+When connecting to a specific session, teachers maintain lobby awareness:
+
+```javascript
+// Connect to specific session (also receives lobby events)
+const wsUrl = 'ws://localhost:8080/ws?user_id=teacher_001&role=instructor&session_id=550e8400-e29b-41d4-a716-446655440000';
+```
+
+### Lobby System Events
+
+#### User Presence Events
+
+**User Connected**
+```json
+{
+  "type": "system",
+  "context": "user_connected",
+  "content": {
+    "user_id": "student_001",
+    "role": "student",
+    "timestamp": "2024-01-15T10:00:00Z"
+  }
+}
+```
+
+**User Disconnected**
+```json
+{
+  "type": "system",
+  "context": "user_disconnected", 
+  "content": {
+    "user_id": "student_001",
+    "timestamp": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+#### Session Lifecycle Events
+
+**Session Started**
+```json
+{
+  "type": "system",
+  "context": "session_started",
+  "content": {
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "session_name": "React Workshop",
+    "instructor_id": "teacher_001",
+    "student_ids": ["student_001", "student_002"],
+    "timestamp": "2024-01-15T10:00:00Z"
+  }
+}
+```
+
+**Session Left** (Replaces session_ended)
+```json
+{
+  "type": "system",
+  "context": "session_left",
+  "content": {
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "reason": "session_ended",
+    "timestamp": "2024-01-15T11:00:00Z"
+  }
+}
+```
+
+#### Connection Management
+
+**Connection Replaced**
+```json
+{
+  "type": "system", 
+  "context": "connection_replaced",
+  "content": {
+    "reason": "new_connection_from_same_user",
+    "timestamp": "2024-01-15T10:15:00Z"
+  }
+}
+```
+
+### Implementation Examples
+
+#### Basic Lobby Event Handling
+
+```javascript
+class TeacherLobbyClient {
+  constructor(instructorId) {
+    this.instructorId = instructorId;
+    this.connectedUsers = new Map();
+    this.availableSessions = new Map();
+  }
+
+  setupLobbyHandlers() {
+    this.ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      
+      if (message.type === 'system') {
+        this.handleSystemMessage(message);
+      }
+    };
+  }
+
+  handleSystemMessage(message) {
+    const event = message.context;
+    const content = message.content;
+
+    switch (event) {
+      case 'user_connected':
+        this.connectedUsers.set(content.user_id, content);
+        this.updatePresenceDisplay();
+        console.log(`👥 ${content.role} ${content.user_id} connected`);
+        break;
+
+      case 'user_disconnected':
+        this.connectedUsers.delete(content.user_id);
+        this.updatePresenceDisplay();
+        console.log(`👥 ${content.user_id} disconnected`);
+        break;
+
+      case 'session_started':
+        this.availableSessions.set(content.session_id, content);
+        this.updateSessionList();
+        
+        // Auto-join if this teacher created the session
+        if (content.instructor_id === this.instructorId) {
+          console.log(`🚀 My session started: ${content.session_name}`);
+          this.autoJoinSession(content.session_id);
+        } else {
+          console.log(`ℹ️ New session available: ${content.session_name}`);
+          this.notifyNewSession(content);
+        }
+        break;
+
+      case 'session_left':
+        console.log(`🔄 Left session: ${content.session_id}`);
+        // Connection remains active in lobby
+        this.currentSessionId = null;
+        this.updateSessionUI();
+        break;
+
+      case 'connection_replaced':
+        console.log(`🔄 Connection replaced: ${content.reason}`);
+        // Handle gracefully - new connection takes over
+        break;
+    }
+  }
+
+  updatePresenceDisplay() {
+    const onlineCount = this.connectedUsers.size;
+    const students = Array.from(this.connectedUsers.values())
+      .filter(user => user.role === 'student');
+    
+    document.getElementById('onlineUsers').textContent = onlineCount;
+    document.getElementById('onlineStudents').textContent = students.length;
+    
+    // Update detailed presence list
+    this.renderPresenceList(students);
+  }
+
+  renderPresenceList(students) {
+    const list = document.getElementById('studentPresenceList');
+    list.innerHTML = students.map(student => `
+      <div class="student-presence-item">
+        <span class="status-indicator online">●</span>
+        <span class="student-id">${student.user_id}</span>
+        <span class="connection-time">${this.formatTime(student.timestamp)}</span>
+      </div>
+    `).join('');
+  }
+
+  notifyNewSession(sessionData) {
+    // Show notification to teacher about new session
+    const notification = document.createElement('div');
+    notification.className = 'session-notification';
+    notification.innerHTML = `
+      <div class="notification-content">
+        <h4>New Session Available</h4>
+        <p><strong>${sessionData.session_name}</strong></p>
+        <p>Students: ${sessionData.student_ids.length}</p>
+        <button onclick="this.joinSession('${sessionData.session_id}')">
+          Join Session
+        </button>
+        <button onclick="this.dismissNotification(this)">
+          Dismiss
+        </button>
+      </div>
+    `;
+    
+    document.getElementById('notifications').appendChild(notification);
+  }
+}
+```
+
+#### Advanced Presence Management
+
+```javascript
+class AdvancedPresenceManager {
+  constructor(client) {
+    this.client = client;
+    this.presenceData = new Map();
+    this.sessionCandidates = new Set();
+  }
+
+  trackUserActivity() {
+    this.client.on('userConnected', (data) => {
+      this.presenceData.set(data.user_id, {
+        ...data,
+        connectionTime: Date.now(),
+        lastSeen: Date.now()
+      });
+
+      // Auto-suggest session creation if enough students are online
+      this.evaluateSessionOpportunity();
+    });
+
+    this.client.on('userDisconnected', (data) => {
+      const user = this.presenceData.get(data.user_id);
+      if (user) {
+        user.disconnectionTime = Date.now();
+        user.sessionDuration = user.disconnectionTime - user.connectionTime;
+      }
+      
+      this.presenceData.delete(data.user_id);
+    });
+  }
+
+  evaluateSessionOpportunity() {
+    const onlineStudents = Array.from(this.presenceData.values())
+      .filter(user => user.role === 'student');
+
+    if (onlineStudents.length >= 3) {
+      this.suggestSessionCreation(onlineStudents);
+    }
+  }
+
+  suggestSessionCreation(students) {
+    const suggestion = {
+      type: 'session_suggestion',
+      students: students.map(s => s.user_id),
+      timestamp: Date.now()
+    };
+
+    // Show UI suggestion to teacher
+    this.showSessionSuggestion(suggestion);
+  }
+
+  showSessionSuggestion(suggestion) {
+    const banner = document.createElement('div');
+    banner.className = 'session-suggestion-banner';
+    banner.innerHTML = `
+      <div class="suggestion-content">
+        <h4>💡 Session Opportunity</h4>
+        <p>${suggestion.students.length} students are online and available</p>
+        <button onclick="this.createSuggestedSession(${JSON.stringify(suggestion.students)})">
+          Create Session
+        </button>
+        <button onclick="this.dismissSuggestion(this)">
+          Not Now
+        </button>
+      </div>
+    `;
+    
+    document.body.appendChild(banner);
+    
+    // Auto-dismiss after 30 seconds
+    setTimeout(() => {
+      if (banner.parentNode) {
+        banner.remove();
+      }
+    }, 30000);
+  }
+
+  getPresenceStats() {
+    const stats = {
+      totalOnline: this.presenceData.size,
+      students: 0,
+      instructors: 0,
+      averageSessionTime: 0,
+      peakTime: null
+    };
+
+    for (const user of this.presenceData.values()) {
+      if (user.role === 'student') stats.students++;
+      if (user.role === 'instructor') stats.instructors++;
+    }
+
+    return stats;
+  }
+}
+```
+
+### Best Practices for Lobby System
+
+#### 1. Connection Management
+- **Persistent Connections**: Keep WebSocket connections alive even between sessions
+- **Graceful Reconnection**: Handle connection drops with automatic reconnection
+- **State Synchronization**: Maintain local state that syncs with server events
+
+#### 2. Presence Awareness
+- **Real-time Updates**: Update UI immediately when users connect/disconnect
+- **Smart Notifications**: Avoid notification fatigue with intelligent filtering
+- **Context-Aware Suggestions**: Use presence data to suggest optimal session timing
+
+#### 3. Session Coordination
+- **Proactive Planning**: Use presence data to plan session timing
+- **Automatic Invitations**: Auto-invite available students to relevant sessions
+- **Load Balancing**: Distribute students across multiple sessions when needed
+
+#### 4. User Experience
+- **Visual Indicators**: Clear presence indicators for online/offline status
+- **Notification Management**: Configurable notification preferences
+- **Session History**: Track which students were available vs. participated
+
+### Migration from Previous System
+
+#### Breaking Changes
+- **session_ended → session_left**: Connections remain active after session ends
+- **Persistent Connections**: WebSocket connections no longer close when sessions end
+- **New Event Types**: Additional system messages for presence and session management
+
+#### Compatibility
+- **Existing Message Types**: All original message types (instructor_broadcast, etc.) work unchanged
+- **Session Management**: REST API for session CRUD operations remains the same
+- **Authentication**: Same WebSocket authentication parameters
 
 ## System Architecture
 

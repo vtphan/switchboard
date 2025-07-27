@@ -33,4 +33,18 @@ type SessionManager interface {
 	// ARCHITECTURAL DISCOVERY: Role-based validation abstracted to interface
 	// enables different validation strategies (cache-first, database-only, etc.)
 	ValidateSessionMembership(sessionID, userID, role string) error
+
+	// Single session enforcement methods
+	// ARCHITECTURAL DISCOVERY: Single session business rule simplifies entire system
+	// by eliminating complex multi-session coordination and race conditions
+	
+	// HasActiveSession checks if any session is currently active
+	// FUNCTIONAL DISCOVERY: Fast boolean check for single session enforcement
+	// uses in-memory cache for sub-millisecond performance
+	HasActiveSession(ctx context.Context) (bool, error)
+
+	// GetActiveSession returns the currently active session or nil
+	// FUNCTIONAL DISCOVERY: Cache-first lookup for O(1) performance
+	// falls back to database only for cache misses
+	GetActiveSession(ctx context.Context) (*types.Session, error)
 }

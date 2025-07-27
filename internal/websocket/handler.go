@@ -60,8 +60,8 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	role := r.URL.Query().Get("role")
 	sessionID := r.URL.Query().Get("session_id")
 	
-	if userID == "" || role == "" || sessionID == "" {
-		http.Error(w, "Missing required query parameters: user_id, role, session_id", http.StatusBadRequest)
+	if userID == "" || role == "" {
+		http.Error(w, "Missing required query parameters: user_id, role", http.StatusBadRequest)
 		return
 	}
 	
@@ -82,16 +82,51 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Validate session membership using session manager
 	// ARCHITECTURAL DISCOVERY: Delegate session validation to SessionManager interface
 	// enables different validation strategies (cache-first, database-only, etc.)
-	if err := h.sessionManager.ValidateSessionMembership(sessionID, userID, role); err != nil {
-		switch err {
-		case interfaces.ErrSessionNotFound:
-			http.Error(w, "Session not found or ended", http.StatusNotFound)
-		case interfaces.ErrUnauthorized:
-			http.Error(w, "Not authorized to join this session", http.StatusForbidden)
-		default:
-			http.Error(w, "Session validation failed", http.StatusInternalServerError)
+	// LOBBY SYSTEM: Allow connections without session validation for lobby connections
+	if sessionID != "" && sessionID != "lobby" {
+		if err := h.sessionManager.ValidateSessionMembership(sessionID, userID, role); err != nil {
+			switch err {
+			case interfaces.ErrSessionNotFound:
+				http.Error(w, "Session not found or ended", http.StatusNotFound)
+			case interfaces.ErrUnauthorized:
+				http.Error(w, "Not authorized to join this session", http.StatusForbidden)
+			default:
+				http.Error(w, "Session validation failed", http.StatusInternalServerError)
+			}
+			return
 		}
-		return
+	} else {
+		// AUTO-ASSIGNMENT LOGIC: Check if student/instructor should be assigned to active session
+		if sessionID == "" {
+			// Try to get active session for auto-assignment
+			activeSession, err := h.sessionManager.GetActiveSession(r.Context())
+			if err == nil && activeSession != nil {
+				// Check if user belongs to the active session
+				if role == "instructor" {
+					// Instructors have universal access to active sessions
+					sessionID = activeSession.ID
+					log.Printf("DEBUG: Auto-assigned instructor %s to active session %s", userID, sessionID)
+				} else if role == "student" {
+					// Check if student is enrolled in the active session
+					for _, studentID := range activeSession.StudentIDs {
+						if studentID == userID {
+							sessionID = activeSession.ID
+							log.Printf("DEBUG: Auto-assigned student %s to active session %s", userID, sessionID)
+							break
+						}
+					}
+				}
+			}
+			
+			// If no auto-assignment occurred, assign to lobby
+			if sessionID == "" {
+				sessionID = "lobby"
+				log.Printf("DEBUG: Assigned %s %s to lobby (no active session or not enrolled)", role, userID)
+			}
+		} else {
+			// Explicit sessionID provided - honor it (including explicit "lobby")
+			log.Printf("DEBUG: Using explicit sessionID: %s for %s %s", sessionID, role, userID)
+		}
 	}
 	
 	// Upgrade to WebSocket
@@ -145,7 +180,9 @@ func (h *Handler) sendSessionHistory(conn *Connection) {
 	userID := conn.GetUserID()
 	role := conn.GetRole()
 	
-	ctx := context.Background()
+	// TIMEOUT FIX: Add database timeout for session history retrieval
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	messages, err := h.dbManager.GetSessionHistory(ctx, sessionID)
 	if err != nil {
 		log.Printf("Failed to get session history: %v", err)

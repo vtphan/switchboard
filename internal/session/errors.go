@@ -13,4 +13,7 @@ var (
 	ErrSessionAlreadyEnded = errors.New("session is already ended")
 	ErrUnauthorized        = errors.New("user not authorized for this session")
 	ErrInvalidRole         = errors.New("invalid role: must be 'student' or 'instructor'")
+	
+	// Single session enforcement errors
+	ErrActiveSessionExists = errors.New("cannot create session: active session exists")
 )

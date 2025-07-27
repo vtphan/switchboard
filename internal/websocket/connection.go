@@ -23,6 +23,7 @@ type Connection struct {
 	cancel        context.CancelFunc  // For cleanup
 	closeOnce     sync.Once           // Ensure single close
 	mu            sync.RWMutex        // Protect auth fields
+	writeMu       sync.Mutex          // Protect writeCh access
 }
 
 // NewConnection creates a new WebSocket connection wrapper
@@ -45,11 +46,14 @@ func NewConnection(conn *websocket.Conn) *Connection {
 // ARCHITECTURAL DISCOVERY: Single writer goroutine pattern eliminates races
 func (c *Connection) writeLoop() {
 	defer func() {
+		// Acquire mutex before cleaning up channel
+		c.writeMu.Lock()
 		// Clean up channel on exit
 		for len(c.writeCh) > 0 {
 			<-c.writeCh // Drain remaining messages
 		}
 		close(c.writeCh)
+		c.writeMu.Unlock()
 	}()
 	
 	for {
@@ -77,7 +81,7 @@ func (c *Connection) writeLoop() {
 
 // WriteJSON implementation with timeout and error handling
 func (c *Connection) WriteJSON(v interface{}) error {
-	// Check if connection is closed
+	// Check if connection is closed first
 	select {
 	case <-c.ctx.Done():
 		return ErrConnectionClosed
@@ -90,7 +94,25 @@ func (c *Connection) WriteJSON(v interface{}) error {
 		return ErrInvalidJSON // FUNCTIONAL: Error wrapping for debugging
 	}
 	
-	// Send to write channel with timeout  
+	// Protect against concurrent access to writeCh
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	
+	// Double-check if connection was closed while waiting for lock
+	select {
+	case <-c.ctx.Done():
+		return ErrConnectionClosed
+	default:
+	}
+	
+	// Send to write channel with timeout - now protected by mutex
+	// Use defer to handle any potential panics from closed channels
+	defer func() {
+		if r := recover(); r != nil {
+			// Channel was closed during send, which is expected during shutdown
+		}
+	}()
+	
 	select {
 	case c.writeCh <- data:
 		return nil
@@ -153,4 +175,12 @@ func (c *Connection) GetSessionID() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.sessionID
+}
+
+// SetSessionID updates the session ID for auto-transition
+// PHASE 4 DISCOVERY: Enables registry to update connection state during transitions
+func (c *Connection) SetSessionID(sessionID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionID = sessionID
 }

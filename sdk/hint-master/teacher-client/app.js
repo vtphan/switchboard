@@ -16,6 +16,7 @@ class HintMasterApp {
     this.teacher = new SwitchboardSDK.SwitchboardTeacher('teacher_001');
     this.currentSession = null;
     this.experts = new Map();
+    this.connectedUsers = new Map(); // LOBBY SYSTEM: Track online users
     
     // Initialize experts
     EXPERTS.forEach(expert => {
@@ -37,6 +38,33 @@ class HintMasterApp {
       onHistoryComplete: () => console.log('Message history loaded'),
       onError: (error) => this.handleError(error)
     });
+    
+    // LOBBY SYSTEM: Add presence and session management handlers
+    this.teacher.on('userConnected', (data) => {
+      this.connectedUsers.set(data.user_id, data);
+      this.updatePresenceDisplay();
+      console.log(`👥 User connected: ${data.user_id} (${data.role})`);
+    });
+    
+    this.teacher.on('userDisconnected', (data) => {
+      this.connectedUsers.delete(data.user_id);
+      this.updatePresenceDisplay();
+      console.log(`👥 User disconnected: ${data.user_id}`);
+    });
+    
+    this.teacher.on('sessionLeft', (data) => {
+      console.log(`🔄 Left session: ${data.session_id}`);
+      // UI will be updated by connection status handler
+    });
+    
+    this.teacher.on('sessionStarted', (data) => {
+      if (data.instructor_id === this.teacher.userId) {
+        console.log(`🚀 My session started: ${data.session_name}`);
+        this.updateSessionUI(data);
+      } else {
+        console.log(`ℹ️ Other session started: ${data.session_name}`);
+      }
+    });
 
     // UI event handlers
     document.getElementById('createSessionBtn').onclick = () => this.createSession();
@@ -57,8 +85,9 @@ class HintMasterApp {
   getExpertHintsHtml(expertId) {
     const expertData = this.experts.get(expertId);
     if (expertData && expertData.hints && expertData.hints.length > 0) {
+      // Display the single hint (latest one)
       return `<div class="hint-content">
-        ${expertData.hints.map(h => `<p style="margin: 8px 0; line-height: 1.5;">${h}</p>`).join('')}
+        <p style="margin: 8px 0; line-height: 1.5;">${expertData.hints[0]}</p>
       </div>`;
     } else {
       return `<div class="no-hints">
@@ -177,13 +206,15 @@ class HintMasterApp {
     
     if (expert && message.context === 'hint') {
       const hint = message.content.hint || message.content.text || 'No hint';
-      expert.hints.push(hint);
+      
+      // Store only the latest hint for each client
+      expert.hints = [hint];
       
       const hintsDiv = document.getElementById(`hints-${expertId}`);
       if (hintsDiv) {
         hintsDiv.innerHTML = `
           <div class="hint-content">
-            ${expert.hints.map(h => `<p style="margin: 8px 0; line-height: 1.5;">${h}</p>`).join('')}
+            <p style="margin: 8px 0; line-height: 1.5;">${hint}</p>
           </div>
         `;
       }
@@ -400,6 +431,37 @@ class HintMasterApp {
       }
       if (statusIndicator) {
         statusIndicator.textContent = '🔴';
+      }
+    }
+  }
+  
+  // LOBBY SYSTEM: Presence management methods
+  
+  updatePresenceDisplay() {
+    // Update UI to show who's online
+    const onlineCount = this.connectedUsers.size;
+    const onlineUsersElement = document.getElementById('onlineUsers');
+    
+    if (onlineUsersElement) {
+      onlineUsersElement.textContent = onlineCount;
+    }
+    
+    // Could add more detailed presence display here
+    console.log(`👥 Online users: ${onlineCount}`);
+  }
+  
+  updateSessionUI(sessionData) {
+    // Update UI when session is created/started
+    if (sessionData.session_id && sessionData.session_name) {
+      this.currentSession = {
+        id: sessionData.session_id,
+        name: sessionData.session_name
+      };
+      
+      // Update session display elements if they exist
+      const sessionIdElement = document.getElementById('currentSessionId');
+      if (sessionIdElement) {
+        sessionIdElement.textContent = sessionData.session_id.substring(0, 8) + '...';
       }
     }
   }

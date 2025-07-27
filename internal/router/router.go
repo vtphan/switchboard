@@ -69,9 +69,13 @@ func (r *Router) RouteMessage(ctx context.Context, message *types.Message) error
 	}
 	
 	// Persist message first (persist-then-route pattern)
-	// ARCHITECTURAL DISCOVERY: Database persistence must complete before routing to prevent audit gaps
+	// TIMEOUT FIX: Add database timeout to prevent routing delays
 	if r.dbManager != nil {
-		if err := r.dbManager.StoreMessage(ctx, message); err != nil {
+		// Create timeout context for database operation (5 seconds max)
+		dbCtx, dbCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer dbCancel()
+		
+		if err := r.dbManager.StoreMessage(dbCtx, message); err != nil {
 			return fmt.Errorf("failed to persist message: %w", err)
 		}
 	}

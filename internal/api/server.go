@@ -3,21 +3,27 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	sessionpkg "switchboard/internal/session"
+	"switchboard/internal/websocket"
 	"switchboard/pkg/interfaces"
 	"switchboard/pkg/types"
-	"switchboard/internal/websocket"
 )
 
 // Registry interface to avoid tight coupling to websocket.Registry implementation
 type Registry interface {
 	GetSessionConnections(sessionID string) []*websocket.Connection
 	GetStats() map[string]int
+	BroadcastToUsers(userIDs []string, message interface{})
+	// Auto-transition methods for Phase 4
+	GetLobbyConnections() []*websocket.Connection
+	TransitionUserToSession(userID, sessionID string) error
 }
 
 // ARCHITECTURAL DISCOVERY: HTTP API layer serves as pure interface between external clients and internal components
@@ -76,14 +82,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	// Extract session ID from URL path
 	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
-	if path == "" {
-		s.sendError(w, "Session ID required", http.StatusBadRequest)
-		return
-	}
-	
 	sessionID := strings.Split(path, "/")[0]
-	if sessionID == "" {
-		s.sendError(w, "Invalid session ID", http.StatusBadRequest)
+	
+	log.Printf("DEBUG: handleSessionByID - path: %s, sessionID: %s, method: %s", path, sessionID, r.Method)
+	
+	if sessionID == "" || sessionID == "api" {
+		s.sendError(w, "Session ID required", http.StatusBadRequest)
 		return
 	}
 	
@@ -139,6 +143,14 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
+// ActiveSessionConflictResponse represents the 409 error response
+// FUNCTIONAL DISCOVERY: Detailed error response guides teacher workflow
+type ActiveSessionConflictResponse struct {
+	Error         string         `json:"error"`
+	Message       string         `json:"message"`
+	ActiveSession *types.Session `json:"active_session"`
+}
+
 // FUNCTIONAL DISCOVERY: POST /api/sessions - Create new session with duplicate student ID removal
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var req CreateSessionRequest
@@ -164,6 +176,11 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// FUNCTIONAL DISCOVERY: Create session through SessionManager (handles duplicate removal)
 	session, err := s.sessionManager.CreateSession(r.Context(), req.Name, req.InstructorID, req.StudentIDs)
 	if err != nil {
+		// ARCHITECTURAL DISCOVERY: Handle single session enforcement at API layer
+		if errors.Is(err, sessionpkg.ErrActiveSessionExists) {
+			s.sendActiveSessionConflictError(w, r.Context())
+			return
+		}
 		if strings.Contains(err.Error(), "validation") {
 			s.sendError(w, err.Error(), http.StatusBadRequest)
 		} else {
@@ -171,6 +188,82 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	
+	// AUTO-TRANSITION: Move enrolled students from lobby to session
+	lobbyConnections := s.registry.GetLobbyConnections()
+	var transitionedUsers []string
+	
+	for _, conn := range lobbyConnections {
+		if conn == nil {
+			continue
+		}
+		
+		userID := conn.GetUserID()
+		role := conn.GetRole()
+		
+		// Auto-transition logic consistent with auto-assignment (Phase 3)
+		if role == "instructor" {
+			// Instructors have universal access to active sessions
+			if err := s.registry.TransitionUserToSession(userID, session.ID); err != nil {
+				log.Printf("WARNING: Failed to auto-transition instructor %s to session %s: %v", userID, session.ID, err)
+			} else {
+				transitionedUsers = append(transitionedUsers, userID)
+				log.Printf("DEBUG: Auto-transitioned instructor %s from lobby to session %s", userID, session.ID)
+			}
+		} else if role == "student" {
+			// Check if student is enrolled in this session
+			for _, enrolledStudentID := range session.StudentIDs {
+				if enrolledStudentID == userID {
+					// Transition student from lobby to session
+					if err := s.registry.TransitionUserToSession(userID, session.ID); err != nil {
+						log.Printf("WARNING: Failed to auto-transition student %s to session %s: %v", userID, session.ID, err)
+					} else {
+						transitionedUsers = append(transitionedUsers, userID)
+						log.Printf("DEBUG: Auto-transitioned student %s from lobby to session %s", userID, session.ID)
+					}
+					break
+				}
+			}
+		}
+	}
+	
+	// Send transition notifications to users who were moved
+	if len(transitionedUsers) > 0 {
+		transitionMsg := map[string]interface{}{
+			"type":    "system",
+			"context": "session_transition",
+			"content": map[string]interface{}{
+				"session_id":   session.ID,
+				"session_name": session.Name,
+				"reason":       "Auto-transitioned from lobby to session",
+				"timestamp":    time.Now(),
+			},
+		}
+		s.registry.BroadcastToUsers(transitionedUsers, transitionMsg)
+		log.Printf("Auto-transitioned %d students from lobby to session %s", len(transitionedUsers), session.ID)
+	}
+
+	// LOBBY SYSTEM: Broadcast session_started to enrolled users
+	sessionStartedMsg := map[string]interface{}{
+		"type":    "system",
+		"context": "session_started",
+		"content": map[string]interface{}{
+			"session_id":   session.ID,
+			"session_name": session.Name,
+			"instructor_id": session.CreatedBy,
+			"student_ids":  session.StudentIDs,
+			"timestamp":    time.Now(),
+		},
+	}
+	
+	// Create list of all session participants (instructor + students)
+	allParticipants := make([]string, 0, len(session.StudentIDs)+1)
+	allParticipants = append(allParticipants, session.CreatedBy) // instructor
+	allParticipants = append(allParticipants, session.StudentIDs...) // students
+	
+	// Broadcast to all enrolled participants who are currently connected
+	s.registry.BroadcastToUsers(allParticipants, sessionStartedMsg)
+	log.Printf("Broadcast session_started for session %s to %d participants", session.ID, len(allParticipants))
 	
 	// FUNCTIONAL DISCOVERY: Return 201 Created with session data
 	w.WriteHeader(http.StatusCreated)
@@ -203,39 +296,39 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, sessionID st
 func (s *Server) endSession(w http.ResponseWriter, r *http.Request, sessionID string) {
 	log.Printf("DEBUG: endSession() called for sessionID: %s", sessionID)
 	
-	// Notify all connected clients before ending the session
-	connections := s.registry.GetSessionConnections(sessionID)
-	log.Printf("DEBUG: GetSessionConnections() returned %d connections for session %s", len(connections), sessionID)
-	
-	if len(connections) > 0 {
-		sessionEndedMsg := map[string]interface{}{
-			"type":    "system",
-			"context": "session_ended",
-			"content": map[string]interface{}{
-				"event":  "session_ended",
-				"reason": "Session ended by instructor",
-			},
+	// Get session information first to find all participants
+	session, err := s.sessionManager.GetSession(r.Context(), sessionID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			s.sendError(w, "Session not found", http.StatusNotFound)
+		} else {
+			s.sendError(w, "Failed to get session", http.StatusInternalServerError)
 		}
-		
-		log.Printf("DEBUG: Prepared session_ended message: %+v", sessionEndedMsg)
-		
-		// Send session_ended message to all connected clients
-		successCount := 0
-		for i, conn := range connections {
-			log.Printf("DEBUG: Attempting to send session_ended to connection %d", i)
-			if err := conn.WriteJSON(sessionEndedMsg); err != nil {
-				log.Printf("ERROR: Failed to send session_ended to client %d: %v", i, err)
-			} else {
-				successCount++
-				log.Printf("DEBUG: Successfully sent session_ended to connection %d", i)
-			}
-		}
-		log.Printf("SUCCESS: Sent session_ended message to %d/%d connected clients", successCount, len(connections))
-	} else {
-		log.Printf("WARNING: No connections found for session %s - cannot send session_ended message", sessionID)
+		return
 	}
 	
-	err := s.sessionManager.EndSession(r.Context(), sessionID)
+	// LOBBY SYSTEM: Send session_left to all session participants (like session_started)
+	sessionLeftMsg := map[string]interface{}{
+		"type":    "system",
+		"context": "session_left",
+		"content": map[string]interface{}{
+			"session_id":   sessionID,
+			"session_name": session.Name,
+			"reason":       "Session ended by instructor",
+			"timestamp":    time.Now(),
+		},
+	}
+	
+	// Create list of all session participants (instructor + students)
+	allParticipants := make([]string, 0, len(session.StudentIDs)+1)
+	allParticipants = append(allParticipants, session.CreatedBy) // instructor
+	allParticipants = append(allParticipants, session.StudentIDs...) // students
+	
+	// Broadcast to all enrolled participants who are currently connected (regardless of their current session)
+	s.registry.BroadcastToUsers(allParticipants, sessionLeftMsg)
+	log.Printf("Broadcast session_left for session %s to %d participants", sessionID, len(allParticipants))
+	
+	err = s.sessionManager.EndSession(r.Context(), sessionID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			s.sendError(w, "Session not found", http.StatusNotFound)
@@ -322,6 +415,34 @@ func (s *Server) sendError(w http.ResponseWriter, message string, code int) {
 		Error:   http.StatusText(code),
 		Code:    code,
 		Message: message,
+	})
+}
+
+// sendActiveSessionConflictError sends a 409 response with active session details
+// FUNCTIONAL DISCOVERY: Detailed error response guides teacher workflow
+func (s *Server) sendActiveSessionConflictError(w http.ResponseWriter, ctx context.Context) {
+	// Get the active session details
+	activeSession, err := s.sessionManager.GetActiveSession(ctx)
+	if err != nil {
+		// Fallback to generic error if we can't get session details
+		s.sendError(w, "Cannot create session: active session exists", http.StatusConflict)
+		return
+	}
+	
+	if activeSession == nil {
+		// This shouldn't happen, but handle gracefully
+		s.sendError(w, "Cannot create session: active session exists", http.StatusConflict)
+		return
+	}
+	
+	// Create detailed conflict response
+	message := fmt.Sprintf("Cannot create new session. Active session '%s' must be ended first.", activeSession.Name)
+	
+	w.WriteHeader(http.StatusConflict)
+	json.NewEncoder(w).Encode(ActiveSessionConflictResponse{
+		Error:         "Active session exists",
+		Message:       message,
+		ActiveSession: activeSession,
 	})
 }
 

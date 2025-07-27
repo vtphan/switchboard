@@ -123,12 +123,11 @@ class HintAgent:
             # Set up event handlers
             self._setup_event_handlers()
             
-            # Connect to available session
+            # Connect to available session or lobby
             self.session = await self.client.connect_to_available_session()
             
             if not self.session:
-                print("⚠️ No available sessions found. Waiting for sessions...")
-                await self._wait_for_sessions()
+                print("⚠️ No available sessions found. Connected to lobby, waiting for sessions...")
             else:
                 print(f"✅ Connected to session: {self.session.name} ({self.session.id})")
             
@@ -173,9 +172,12 @@ class HintAgent:
         async def handle_connection(connected: bool) -> None:
             """Handle connection changes"""
             if connected:
-                print("🟢 Connected to session")
+                if self.client.is_in_lobby():
+                    print("🟢 Connected to lobby")
+                else:
+                    print("🟢 Connected to session")
             else:
-                print("🔴 Disconnected from session")
+                print("🔴 Disconnected")
                 if not self.shutdown_requested:
                     # Try to send analytics, but don't crash if it fails
                     try:
@@ -183,9 +185,7 @@ class HintAgent:
                     except Exception as e:
                         print(f"⚠️ Could not send disconnection analytics: {e}")
                     
-                    # Wait for new sessions to become available
-                    print("⏳ Waiting for new sessions...")
-                    await self._wait_for_sessions()
+                    # In lobby system, reconnection is handled automatically by SDK
         
         @self.client.on_error
         async def handle_error(error: Exception) -> None:
@@ -201,21 +201,43 @@ class HintAgent:
                 print(f"🔍 DEBUG: message.context: {message.context}")
                 print(f"🔍 DEBUG: message.content: {message.content}")
                 
-                # Check both Content.event and Context field for session_ended
-                event = None
-                if isinstance(message.content, dict) and "event" in message.content:
-                    event = message.content["event"]
-                elif message.context:
-                    event = message.context
-                
+                event = message.context
                 print(f"🔍 DEBUG: extracted event: {event}")
                 
-                if event == "session_ended":
+                # LOBBY SYSTEM: Handle new message types
+                if event == "session_left":
                     reason = message.content.get("reason", "Unknown reason") if isinstance(message.content, dict) else "Unknown reason"
-                    print(f"🛑 Session ended by server: {reason}")
-                    print(f"⏳ {self.config.name} will wait for the next session...")
-                    # Don't set shutdown_requested = True, let the client handle disconnection
-                    # The agent will continue running and wait for new sessions
+                    session_id = message.content.get("session_id", "unknown") if isinstance(message.content, dict) else "unknown"
+                    print(f"🔄 Left session {session_id}: {reason}")
+                    print(f"⏳ {self.config.name} returned to lobby, waiting for next session...")
+                    self.session = None
+                    
+                elif event == "session_started":
+                    session_data = message.content if isinstance(message.content, dict) else {}
+                    session_id = session_data.get("session_id", "unknown")
+                    session_name = session_data.get("session_name", "Unknown Session")
+                    
+                    # Check if we're enrolled in this session
+                    student_ids = session_data.get("student_ids", [])
+                    if self.config.user_id in student_ids:
+                        print(f"🚀 New session available: {session_name} ({session_id})")
+                        print(f"✅ Auto-joining session (enrolled as {self.config.user_id})")
+                        # The SDK will handle auto-joining via _should_join_session
+                    else:
+                        print(f"ℹ️ New session started: {session_name} (not enrolled)")
+                
+                elif event == "presence_update":
+                    # Handle unified presence updates (replaces user_connected/disconnected/connection_replaced)
+                    user_id = message.content.get("user_id", "unknown") if isinstance(message.content, dict) else "unknown"
+                    session_id = message.content.get("session_id") if isinstance(message.content, dict) else None
+                    role = message.content.get("role", "unknown") if isinstance(message.content, dict) else "unknown"
+                    
+                    if session_id is None:
+                        print(f"👥 User disconnected: {user_id}")
+                    elif session_id == "lobby":
+                        print(f"👥 User in lobby: {user_id} ({role})")
+                    else:
+                        print(f"👥 User joined session: {user_id} ({role}) → {session_id}")
                     
                 elif event == "history_complete":
                     print("📚 Message history loaded")
@@ -395,19 +417,7 @@ class HintAgent:
         
         await self.client.send_analytics(analytics_content, 'connection')
     
-    async def _wait_for_sessions(self) -> None:
-        """Wait for available sessions"""
-        while not self.shutdown_requested:
-            await asyncio.sleep(30)  # Poll every 30 seconds
-            
-            try:
-                self.session = await self.client.connect_to_available_session()
-                if self.session:
-                    print(f"✅ Connected to session: {self.session.name} ({self.session.id})")
-                    await self._send_connection_analytics('connected')
-                    break
-            except Exception as e:
-                print(f"❌ Session polling error: {e}")
+    # LOBBY SYSTEM: Polling removed - sessions are joined via event-driven system
     
     async def _keep_alive(self) -> None:
         """Keep the agent running"""

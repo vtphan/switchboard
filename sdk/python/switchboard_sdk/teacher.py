@@ -354,3 +354,31 @@ class SwitchboardTeacher(SwitchboardClient):
     def on_system_message(self, handler):
         """Register handler for system messages"""
         self.on_message(MessageType.SYSTEM, handler)
+    
+    # LOBBY SYSTEM: Presence and session management methods
+    
+    def on_user_connected(self, handler):
+        """Register handler for user_connected events"""
+        async def user_connected_handler(message):
+            if message.context == "user_connected" and isinstance(message.content, dict):
+                await handler(message.content)
+        
+        self.on_message(MessageType.SYSTEM, user_connected_handler)
+    
+    def on_user_disconnected(self, handler):
+        """Register handler for user_disconnected events"""
+        async def user_disconnected_handler(message):
+            if message.context == "user_disconnected" and isinstance(message.content, dict):
+                await handler(message.content)
+        
+        self.on_message(MessageType.SYSTEM, user_disconnected_handler)
+    
+    def on_session_started(self, handler):
+        """Register handler for session_started events (for sessions created by this instructor)"""
+        async def session_started_handler(message):
+            if message.context == "session_started" and isinstance(message.content, dict):
+                session_data = message.content
+                if session_data.get("instructor_id") == self.user_id:
+                    await handler(session_data)
+        
+        self.on_message(MessageType.SYSTEM, session_started_handler)

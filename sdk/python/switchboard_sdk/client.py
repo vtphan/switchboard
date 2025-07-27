@@ -144,6 +144,14 @@ class SwitchboardClient:
         self._shutdown = False
         
         await self._establish_connection()
+    
+    async def connect_to_lobby(self) -> None:
+        """
+        Connect to lobby without joining any specific session
+        Users will receive real-time notifications about sessions and presence
+        """
+        logger.info("🏛️ Connecting to lobby...")
+        await self.connect("lobby")
 
     async def _establish_connection(self) -> None:
         """Internal method to establish WebSocket connection"""
@@ -275,23 +283,45 @@ class SwitchboardClient:
         
         logger.info(f"🔍 DEBUG: extracted event: {event}")
         
-        if event == "session_ended":
+        # LOBBY SYSTEM: Handle new message types
+        if event == "session_left":
             reason = message.content.get("reason", "Unknown reason") if isinstance(message.content, dict) else "Unknown reason"
-            logger.info(f"🛑 DEBUG: Session ended by server, reason: {reason}")
-            logger.info("🛑 DEBUG: About to notify message handlers before disconnecting")
+            session_id = message.content.get("session_id", "unknown") if isinstance(message.content, dict) else "unknown"
+            logger.info(f"🔄 DEBUG: Left session {session_id}, reason: {reason}")
             
-            # Notify message handlers first so they can process the session_ended event
+            # Don't disconnect! Return to lobby state
+            self.current_session_id = None
             await self._notify_message_handlers(message)
+            logger.info("🔄 DEBUG: Returned to lobby state")
+            return
             
-            # Brief delay to ensure handlers complete
-            import asyncio
-            await asyncio.sleep(0.1)
+        elif event == "session_started":
+            session_data = message.content if isinstance(message.content, dict) else {}
+            session_id = session_data.get("session_id", "unknown")
+            logger.info(f"🚀 DEBUG: Session started notification: {session_id}")
             
-            logger.info("🛑 DEBUG: Now disconnecting after handlers processed session_ended")
-            self._shutdown = True
-            await self.disconnect()
-            await self._notify_error_handlers(SessionEndedError("Session was ended"))
-            return  # Skip the normal message handler notification below
+            # Check if we should auto-join this session
+            if await self._should_join_session(session_data):
+                await self._join_session(session_id)
+            
+            await self._notify_message_handlers(message)
+            return
+            
+        elif event == "presence_update":
+            # Handle unified presence updates (replaces user_connected/disconnected/connection_replaced)
+            user_id = message.content.get("user_id", "unknown") if isinstance(message.content, dict) else "unknown"
+            session_id = message.content.get("session_id") if isinstance(message.content, dict) else None
+            role = message.content.get("role", "unknown") if isinstance(message.content, dict) else "unknown"
+            
+            if session_id is None:
+                logger.debug(f"👥 DEBUG: User {user_id} disconnected")
+            elif session_id == "lobby":
+                logger.debug(f"👥 DEBUG: User {user_id} ({role}) in lobby")
+            else:
+                logger.debug(f"👥 DEBUG: User {user_id} ({role}) joined session {session_id}")
+            
+            await self._notify_message_handlers(message)
+            return
             
         elif event == "history_complete":
             logger.debug("Message history loaded")
@@ -411,6 +441,33 @@ class SwitchboardClient:
     def is_connected(self) -> bool:
         """Check if currently connected"""
         return self.connected
+        
+    # LOBBY SYSTEM: Helper methods for session management
+    
+    def is_in_lobby(self) -> bool:
+        """Check if currently in lobby state"""
+        return self.connected and (self.current_session_id is None or self.current_session_id == "lobby")
+    
+    async def _should_join_session(self, session_data: dict) -> bool:
+        """
+        Override in subclasses to determine if client should auto-join session
+        Default implementation: never auto-join
+        """
+        return False
+    
+    async def _join_session(self, session_id: str) -> None:
+        """
+        Join a specific session while maintaining connection
+        This will trigger a new WebSocket connection to the session
+        """
+        logger.info(f"🔄 DEBUG: Joining session {session_id}")
+        try:
+            # Reconnect with new session_id
+            await self.connect(session_id)
+        except Exception as e:
+            logger.error(f"❌ Failed to join session {session_id}: {e}")
+            # Stay in lobby on failure
+            self.current_session_id = None
 
     # Context manager support
     

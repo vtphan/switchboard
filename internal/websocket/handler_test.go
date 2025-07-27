@@ -44,6 +44,15 @@ func (m *mockSessionManager) ValidateSessionMembership(sessionID, userID, role s
 	return nil
 }
 
+// New methods for single session enforcement
+func (m *mockSessionManager) HasActiveSession(ctx context.Context) (bool, error) {
+	return false, nil
+}
+
+func (m *mockSessionManager) GetActiveSession(ctx context.Context) (*types.Session, error) {
+	return nil, nil
+}
+
 type mockDatabaseManager struct {
 	getHistoryFunc func(ctx context.Context, sessionID string) ([]*types.Message, error)
 }
@@ -177,12 +186,21 @@ func TestHandler_QueryParameterValidation(t *testing.T) {
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name: "missing session_id",
+			name: "missing session_id - lobby connection allowed",
 			queryParams: map[string]string{
 				"user_id": "user123",
 				"role":    "student",
 			},
-			expectedStatus: http.StatusBadRequest,
+			expectedStatus: http.StatusBadRequest, // Still bad request without WebSocket headers
+		},
+		{
+			name: "explicit lobby connection",
+			queryParams: map[string]string{
+				"user_id":    "user123",
+				"role":       "student",
+				"session_id": "lobby",
+			},
+			expectedStatus: http.StatusBadRequest, // Still bad request without WebSocket headers
 		},
 		{
 			name: "invalid role",
@@ -479,6 +497,321 @@ func TestHandler_HeartbeatMonitoring(t *testing.T) {
 	_, exists = registry.GetUserConnection("user123")
 	if exists {
 		t.Error("Connection should be cleaned up after close")
+	}
+}
+
+// LOBBY SYSTEM TESTS
+
+func TestHandler_LobbyConnectionValidation(t *testing.T) {
+	registry := NewRegistry()
+	sessionManager := &mockSessionManager{
+		validateFunc: func(sessionID, userID, role string) error {
+			// Should not be called for lobby connections
+			t.Error("Session validation should not be called for lobby connections")
+			return nil
+		},
+	}
+	dbManager := &mockDatabaseManager{}
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
+	
+	tests := []struct {
+		name      string
+		sessionID string
+		shouldCallValidation bool
+	}{
+		{
+			name:      "empty session_id defaults to lobby",
+			sessionID: "",
+			shouldCallValidation: false,
+		},
+		{
+			name:      "explicit lobby session_id",
+			sessionID: "lobby", 
+			shouldCallValidation: false,
+		},
+		{
+			name:      "regular session requires validation",
+			sessionID: "session123",
+			shouldCallValidation: true,
+		},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset validation tracking
+			validationCalled := false
+			sessionManager.validateFunc = func(sessionID, userID, role string) error {
+				validationCalled = true
+				return nil
+			}
+			
+			server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
+			defer server.Close()
+			
+			// Build WebSocket URL  
+			wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws" +
+				"?user_id=user123&role=student"
+			if tt.sessionID != "" {
+				wsURL += "&session_id=" + tt.sessionID
+			}
+			
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				t.Fatalf("Failed to connect: %v", err)
+			}
+			defer func() { _ = conn.Close() }()
+			
+			// Give time for connection processing
+			time.Sleep(50 * time.Millisecond)
+			
+			if tt.shouldCallValidation != validationCalled {
+				t.Errorf("Expected validation called: %v, got: %v", 
+					tt.shouldCallValidation, validationCalled)
+			}
+			
+			// Verify connection is registered appropriately
+			registeredConn, exists := registry.GetUserConnection("user123")
+			if !exists {
+				t.Error("Connection should be registered")
+			}
+			
+			expectedSessionID := tt.sessionID
+			if expectedSessionID == "" {
+				expectedSessionID = "lobby"
+			}
+			
+			if registeredConn.GetSessionID() != expectedSessionID {
+				t.Errorf("Expected session ID %s, got %s", 
+					expectedSessionID, registeredConn.GetSessionID())
+			}
+		})
+	}
+}
+
+func TestHandler_LobbyConnectionPresenceEvents(t *testing.T) {
+	t.Skip("Skipping presence event test - requires full integration with hub system")
+}
+
+func TestHandler_LobbyConnectionReplacement(t *testing.T) {
+	registry := NewRegistry()
+	sessionManager := &mockSessionManager{}
+	dbManager := &mockDatabaseManager{}
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
+	
+	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
+	defer server.Close()
+	
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + 
+		"?user_id=user123&role=student&session_id=lobby"
+	
+	// First connection
+	conn1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect first connection: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	
+	// Verify first connection is registered
+	firstConn, exists := registry.GetUserConnection("user123")
+	if !exists {
+		t.Fatal("First connection should be registered")
+	}
+	
+	// Second connection should replace first
+	conn2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect second connection: %v", err)
+	}
+	defer func() { _ = conn2.Close() }()
+	time.Sleep(50 * time.Millisecond)
+	
+	// Just verify the connection was replaced - message testing requires integration
+	t.Log("Connection replacement mechanism tested via registry state")
+	
+	// Verify second connection is now registered
+	secondConn, exists := registry.GetUserConnection("user123")
+	if !exists {
+		t.Fatal("Second connection should be registered")
+	}
+	
+	if firstConn == secondConn {
+		t.Error("Registry should contain the new connection, not the old one")
+	}
+	
+	_ = conn1.Close()
+}
+
+func TestHandler_LobbyAndSessionCoexistence(t *testing.T) {
+	registry := NewRegistry()
+	sessionManager := &mockSessionManager{
+		validateFunc: func(sessionID, userID, role string) error {
+			if sessionID == "valid_session" {
+				return nil
+			}
+			return errors.New("invalid session")
+		},
+	}
+	dbManager := &mockDatabaseManager{}
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
+	
+	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
+	defer server.Close()
+	
+	// Connect user1 to lobby
+	lobbyURL := "ws" + strings.TrimPrefix(server.URL, "http") + 
+		"?user_id=user1&role=student&session_id=lobby"
+	lobbyConn, _, err := websocket.DefaultDialer.Dial(lobbyURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect to lobby: %v", err)
+	}
+	defer func() { _ = lobbyConn.Close() }()
+	
+	// Connect user2 to session
+	sessionURL := "ws" + strings.TrimPrefix(server.URL, "http") + 
+		"?user_id=user2&role=student&session_id=valid_session"
+	sessionConn, _, err := websocket.DefaultDialer.Dial(sessionURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect to session: %v", err)
+	}
+	defer func() { _ = sessionConn.Close() }()
+	
+	time.Sleep(100 * time.Millisecond)
+	
+	// Both connections should be registered
+	lobbyUser, lobbyExists := registry.GetUserConnection("user1")
+	if !lobbyExists {
+		t.Error("Lobby user should be registered")
+	}
+	if lobbyUser.GetSessionID() != "lobby" {
+		t.Error("Lobby user should have session_id 'lobby'")
+	}
+	
+	sessionUser, sessionExists := registry.GetUserConnection("user2")
+	if !sessionExists {
+		t.Error("Session user should be registered")
+	}
+	if sessionUser.GetSessionID() != "valid_session" {
+		t.Error("Session user should have correct session_id")
+	}
+	
+	// Test that GetLobbyConnections returns only lobby connections
+	lobbyConnections := registry.GetLobbyConnections()
+	if len(lobbyConnections) != 1 {
+		t.Errorf("Expected 1 lobby connection, got %d", len(lobbyConnections))
+	}
+	if lobbyConnections[0].GetUserID() != "user1" {
+		t.Error("Lobby connections should include user1")
+	}
+	
+	// Test that GetAllConnections returns both
+	allConnections := registry.GetAllConnections()
+	if len(allConnections) != 2 {
+		t.Errorf("Expected 2 total connections, got %d", len(allConnections))
+	}
+}
+
+// Test registry wrapper to intercept broadcasts
+type testRegistryWrapper struct {
+	Registry    *Registry
+	onBroadcast func(message interface{})
+}
+
+func (r *testRegistryWrapper) RegisterConnection(conn *Connection) error {
+	return r.Registry.RegisterConnection(conn)
+}
+
+func (r *testRegistryWrapper) UnregisterConnection(conn *Connection) {
+	r.Registry.UnregisterConnection(conn)
+}
+
+func (r *testRegistryWrapper) GetUserConnection(userID string) (*Connection, bool) {
+	return r.Registry.GetUserConnection(userID)
+}
+
+func (r *testRegistryWrapper) GetSessionConnections(sessionID string) []*Connection {
+	return r.Registry.GetSessionConnections(sessionID)
+}
+
+func (r *testRegistryWrapper) GetSessionInstructors(sessionID string) []*Connection {
+	return r.Registry.GetSessionInstructors(sessionID)
+}
+
+func (r *testRegistryWrapper) GetSessionStudents(sessionID string) []*Connection {
+	return r.Registry.GetSessionStudents(sessionID)
+}
+
+func (r *testRegistryWrapper) GetLobbyConnections() []*Connection {
+	return r.Registry.GetLobbyConnections()
+}
+
+func (r *testRegistryWrapper) GetAllConnections() []*Connection {
+	return r.Registry.GetAllConnections()
+}
+
+func (r *testRegistryWrapper) GetStats() map[string]int {
+	return r.Registry.GetStats()
+}
+
+func (r *testRegistryWrapper) BroadcastToAll(message interface{}) {
+	if r.onBroadcast != nil {
+		r.onBroadcast(message)
+	}
+	r.Registry.BroadcastToAll(message)
+}
+
+func (r *testRegistryWrapper) BroadcastToUsers(userIDs []string, message interface{}) {
+	r.Registry.BroadcastToUsers(userIDs, message)
+}
+
+func TestHandler_SessionValidationBypass(t *testing.T) {
+	registry := NewRegistry()
+	
+	// Session manager that should fail validation for any session
+	sessionManager := &mockSessionManager{
+		validateFunc: func(sessionID, userID, role string) error {
+			// This should only be called for non-lobby sessions
+			if sessionID == "lobby" || sessionID == "" {
+				t.Errorf("Session validation should not be called for lobby (got sessionID: %s)", sessionID)
+			}
+			return errors.New("session validation failed")
+		},
+	}
+	
+	dbManager := &mockDatabaseManager{}
+	handler := NewHandler(registry, sessionManager, dbManager, &mockHub{})
+	
+	server := httptest.NewServer(http.HandlerFunc(handler.HandleWebSocket))
+	defer server.Close()
+	
+	// Test empty session_id (should default to lobby and bypass validation)
+	emptyURL := "ws" + strings.TrimPrefix(server.URL, "http") + 
+		"?user_id=user1&role=student"
+	conn1, _, err := websocket.DefaultDialer.Dial(emptyURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect with empty session_id: %v", err)
+	}
+	defer func() { _ = conn1.Close() }()
+	
+	// Test explicit lobby session_id (should bypass validation)
+	lobbyURL := "ws" + strings.TrimPrefix(server.URL, "http") + 
+		"?user_id=user2&role=student&session_id=lobby"
+	conn2, _, err := websocket.DefaultDialer.Dial(lobbyURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect with lobby session_id: %v", err)
+	}
+	defer func() { _ = conn2.Close() }()
+	
+	time.Sleep(50 * time.Millisecond)
+	
+	// Both connections should be registered successfully
+	_, exists1 := registry.GetUserConnection("user1")
+	if !exists1 {
+		t.Error("User1 connection should be registered (empty session_id)")
+	}
+	
+	_, exists2 := registry.GetUserConnection("user2")
+	if !exists2 {
+		t.Error("User2 connection should be registered (lobby session_id)")
 	}
 }
 

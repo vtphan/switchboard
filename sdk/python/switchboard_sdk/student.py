@@ -2,10 +2,13 @@
 Student client implementation for Switchboard
 """
 
+import logging
 from typing import List, Dict, Any, Optional
 from .client import SwitchboardClient
 from .types import Session, Message, MessageType, StudentRole
 from .exceptions import SwitchboardError
+
+logger = logging.getLogger(__name__)
 
 
 class SwitchboardStudent(SwitchboardClient):
@@ -62,6 +65,7 @@ class SwitchboardStudent(SwitchboardClient):
     async def connect_to_available_session(self) -> Optional[Session]:
         """
         Automatically connect to first available session
+        If no sessions available, connects to lobby and waits for session_started events
         
         Returns:
             Session object if connection successful, None if no sessions available
@@ -72,6 +76,8 @@ class SwitchboardStudent(SwitchboardClient):
         available_sessions = await self.find_available_sessions()
         
         if not available_sessions:
+            # No active sessions - connect to lobby and wait for session_started events
+            await self.connect_to_lobby()
             return None
             
         session = available_sessions[0]
@@ -258,3 +264,31 @@ class SwitchboardStudent(SwitchboardClient):
     def on_system_message(self, handler):
         """Register handler for system messages"""
         self.on_message(MessageType.SYSTEM, handler)
+    
+    # LOBBY SYSTEM: Override base class methods for student-specific behavior
+    
+    async def _should_join_session(self, session_data: dict) -> bool:
+        """
+        Students should auto-join sessions where they are enrolled
+        """
+        student_ids = session_data.get("student_ids", [])
+        should_join = self.user_id in student_ids
+        
+        if should_join:
+            session_id = session_data.get("session_id", "unknown")
+            logger.info(f"🎓 Student {self.user_id} should auto-join session {session_id}")
+        
+        return should_join
+    
+    def on_session_available(self, handler):
+        """
+        Register handler for session_started events where student is enrolled
+        This provides a convenient way to handle new session notifications
+        """
+        async def session_started_handler(message):
+            if message.context == "session_started" and isinstance(message.content, dict):
+                session_data = message.content
+                if self.user_id in session_data.get("student_ids", []):
+                    await handler(session_data)
+        
+        self.on_message(MessageType.SYSTEM, session_started_handler)

@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Test WebSocket upgrader for registry tests  
@@ -136,8 +138,8 @@ func TestRegistry_ConnectionReplacement(t *testing.T) {
 		t.Error("Connection was not replaced properly")
 	}
 	
-	// Give time for old connection cleanup
-	time.Sleep(10 * time.Millisecond)
+	// Wait for async broadcast operations from connection replacement
+	registry.WaitForBroadcasts()
 }
 
 func TestRegistry_UnregisterConnection(t *testing.T) {
@@ -161,6 +163,9 @@ func TestRegistry_UnregisterConnection(t *testing.T) {
 	
 	// Unregister
 	registry.UnregisterConnection(conn)
+	
+	// Wait for async broadcast operations from unregistration
+	registry.WaitForBroadcasts()
 	
 	// Should no longer exist
 	_, exists = registry.GetUserConnection("user123")
@@ -383,6 +388,253 @@ func TestRegistry_LookupPerformance(t *testing.T) {
 	if averageTime > time.Microsecond {
 		t.Logf("Warning: Lookup time %v may indicate non-O(1) performance", averageTime)
 	}
+}
+
+// LOBBY SYSTEM TESTS
+
+func TestRegistry_LobbyConnectionRegistration(t *testing.T) {
+	registry := NewRegistry()
+	
+	// Register lobby connection
+	wsConn := createTestWebSocketConnection(t)
+	defer func() { _ = wsConn.Close() }()
+	
+	conn := NewConnection(wsConn)
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetCredentials("user123", "student", "lobby")
+	
+	err := registry.RegisterConnection(conn)
+	if err != nil {
+		t.Errorf("Failed to register lobby connection: %v", err)
+	}
+	
+	// Wait for async broadcast operations to complete
+	registry.WaitForBroadcasts()
+	
+	// Should be retrievable by user ID
+	retrievedConn, exists := registry.GetUserConnection("user123")
+	if !exists {
+		t.Error("Lobby connection should be retrievable by user ID")
+	}
+	if retrievedConn.GetSessionID() != "lobby" {
+		t.Error("Connection should have session_id 'lobby'")
+	}
+}
+
+func TestRegistry_GetLobbyConnections(t *testing.T) {
+	registry := NewRegistry()
+	
+	// Register mixed lobby and session connections
+	
+	// Lobby connection 1
+	wsConn1 := createTestWebSocketConnection(t)
+	defer func() { _ = wsConn1.Close() }()
+	lobbyConn1 := NewConnection(wsConn1)
+	defer func() { _ = lobbyConn1.Close() }()
+	_ = lobbyConn1.SetCredentials("lobby_user1", "student", "lobby")
+	_ = registry.RegisterConnection(lobbyConn1)
+	
+	// Regular session connection
+	wsConn2 := createTestWebSocketConnection(t)
+	defer func() { _ = wsConn2.Close() }()
+	sessionConn := NewConnection(wsConn2)
+	defer func() { _ = sessionConn.Close() }()
+	_ = sessionConn.SetCredentials("session_user", "instructor", "session123")
+	_ = registry.RegisterConnection(sessionConn)
+	
+	// Lobby connection 2 (different user)
+	wsConn3 := createTestWebSocketConnection(t)
+	defer func() { _ = wsConn3.Close() }()
+	lobbyConn2 := NewConnection(wsConn3)
+	defer func() { _ = lobbyConn2.Close() }()
+	_ = lobbyConn2.SetCredentials("lobby_user2", "instructor", "lobby")
+	_ = registry.RegisterConnection(lobbyConn2)
+	
+	// GetLobbyConnections should return only lobby connections
+	lobbyConnections := registry.GetLobbyConnections()
+	if len(lobbyConnections) != 2 {
+		t.Errorf("Expected 2 lobby connections, got %d", len(lobbyConnections))
+	}
+	
+	// Verify they are the correct connections
+	userIDs := make(map[string]bool)
+	for _, conn := range lobbyConnections {
+		userIDs[conn.GetUserID()] = true
+		if conn.GetSessionID() != "lobby" {
+			t.Error("All returned connections should have session_id 'lobby'")
+		}
+	}
+	
+	if !userIDs["lobby_user1"] || !userIDs["lobby_user2"] {
+		t.Error("Lobby connections should include lobby_user1 and lobby_user2")
+	}
+	if userIDs["session_user"] {
+		t.Error("Lobby connections should not include session users")
+	}
+}
+
+func TestRegistry_GetAllConnections(t *testing.T) {
+	registry := NewRegistry()
+	
+	// Register mixed connections
+	
+	// Lobby connection
+	wsConn1 := createTestWebSocketConnection(t)
+	defer func() { _ = wsConn1.Close() }()
+	lobbyConn := NewConnection(wsConn1)
+	defer func() { _ = lobbyConn.Close() }()
+	_ = lobbyConn.SetCredentials("lobby_user", "student", "lobby")
+	_ = registry.RegisterConnection(lobbyConn)
+	
+	// Session connection 1
+	wsConn2 := createTestWebSocketConnection(t)
+	defer func() { _ = wsConn2.Close() }()
+	sessionConn1 := NewConnection(wsConn2)
+	defer func() { _ = sessionConn1.Close() }()
+	_ = sessionConn1.SetCredentials("session_user1", "instructor", "session123")
+	_ = registry.RegisterConnection(sessionConn1)
+	
+	// Session connection 2 (different session)
+	wsConn3 := createTestWebSocketConnection(t)
+	defer func() { _ = wsConn3.Close() }()
+	sessionConn2 := NewConnection(wsConn3)
+	defer func() { _ = sessionConn2.Close() }()
+	_ = sessionConn2.SetCredentials("session_user2", "student", "session456")
+	_ = registry.RegisterConnection(sessionConn2)
+	
+	// GetAllConnections should return all connections
+	allConnections := registry.GetAllConnections()
+	if len(allConnections) != 3 {
+		t.Errorf("Expected 3 total connections, got %d", len(allConnections))
+	}
+	
+	// Verify all connections are included
+	userIDs := make(map[string]bool)
+	for _, conn := range allConnections {
+		userIDs[conn.GetUserID()] = true
+	}
+	
+	expected := []string{"lobby_user", "session_user1", "session_user2"}
+	for _, userID := range expected {
+		if !userIDs[userID] {
+			t.Errorf("All connections should include %s", userID)
+		}
+	}
+}
+
+func TestRegistry_BroadcastToAll(t *testing.T) {
+	t.Skip("Skipping broadcast test - requires integration with message routing")
+}
+
+func TestRegistry_BroadcastToUsers(t *testing.T) {
+	t.Skip("Skipping broadcast test - requires integration with message routing")
+}
+
+func TestRegistry_LobbyBroadcastConcurrency(t *testing.T) {
+	t.Skip("Skipping broadcast test - requires integration with message routing")
+}
+
+func TestRegistry_LobbyConnectionMixedWithSessions(t *testing.T) {
+	registry := NewRegistry()
+	
+	// Create a mix of lobby and session connections
+	
+	// Lobby connections
+	for i := 0; i < 5; i++ {
+		wsConn := createTestWebSocketConnection(t)
+		defer func() { _ = wsConn.Close() }()
+		
+		conn := NewConnection(wsConn)
+		defer func() { _ = conn.Close() }()
+		
+		_ = conn.SetCredentials(fmt.Sprintf("lobby_user%d", i), "student", "lobby")
+		_ = registry.RegisterConnection(conn)
+	}
+	
+	// Session A connections
+	for i := 0; i < 3; i++ {
+		wsConn := createTestWebSocketConnection(t)
+		defer func() { _ = wsConn.Close() }()
+		
+		conn := NewConnection(wsConn)
+		defer func() { _ = conn.Close() }()
+		
+		_ = conn.SetCredentials(fmt.Sprintf("sessionA_user%d", i), "student", "sessionA")
+		_ = registry.RegisterConnection(conn)
+	}
+	
+	// Session B connections
+	for i := 0; i < 2; i++ {
+		wsConn := createTestWebSocketConnection(t)
+		defer func() { _ = wsConn.Close() }()
+		
+		conn := NewConnection(wsConn)
+		defer func() { _ = conn.Close() }()
+		
+		_ = conn.SetCredentials(fmt.Sprintf("sessionB_user%d", i), "instructor", "sessionB")
+		_ = registry.RegisterConnection(conn)
+	}
+	
+	// Verify counts
+	lobbyConnections := registry.GetLobbyConnections()
+	if len(lobbyConnections) != 5 {
+		t.Errorf("Expected 5 lobby connections, got %d", len(lobbyConnections))
+	}
+	
+	sessionAConnections := registry.GetSessionConnections("sessionA")
+	if len(sessionAConnections) != 3 {
+		t.Errorf("Expected 3 sessionA connections, got %d", len(sessionAConnections))
+	}
+	
+	sessionBConnections := registry.GetSessionConnections("sessionB")
+	if len(sessionBConnections) != 2 {
+		t.Errorf("Expected 2 sessionB connections, got %d", len(sessionBConnections))
+	}
+	
+	allConnections := registry.GetAllConnections()
+	if len(allConnections) != 10 {
+		t.Errorf("Expected 10 total connections, got %d", len(allConnections))
+	}
+	
+	// Verify that lobby connections don't appear in session lookups
+	for _, conn := range lobbyConnections {
+		if conn.GetSessionID() != "lobby" {
+			t.Error("Lobby connection has wrong session ID")
+		}
+	}
+	
+	// Verify session connections don't appear in lobby
+	for _, conn := range sessionAConnections {
+		if conn.GetSessionID() == "lobby" {
+			t.Error("Session connection should not appear in session results with lobby ID")
+		}
+	}
+}
+
+// Helper: Connection wrapper that tracks sent messages for testing
+type trackingConnection struct {
+	*Connection
+	sentMessages []map[string]interface{}
+	mutex        sync.RWMutex
+}
+
+func newTrackingConnection(wsConn *websocket.Conn) *trackingConnection {
+	return &trackingConnection{
+		Connection:   NewConnection(wsConn),
+		sentMessages: make([]map[string]interface{}, 0),
+	}
+}
+
+func (tc *trackingConnection) WriteJSON(message interface{}) error {
+	tc.mutex.Lock()
+	defer tc.mutex.Unlock()
+	
+	if msg, ok := message.(map[string]interface{}); ok {
+		tc.sentMessages = append(tc.sentMessages, msg)
+	}
+	
+	// Don't actually send to WebSocket in tests
+	return nil
 }
 
 // Test completed - fmt imported at top
