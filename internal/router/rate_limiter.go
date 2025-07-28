@@ -7,13 +7,15 @@ import (
 	"time"
 )
 
-// RateLimiter implements per-client rate limiting
+// RateLimiter implements per-client rate limiting using sliding window
 // MEMORY LEAK FIX: Auto-cleanup prevents memory leaks from disconnected clients
+// Implements MessageRateLimiter interface
 type RateLimiter struct {
-	mu           sync.RWMutex
+	mu           sync.Mutex
 	clients      map[string]*ClientLimit
 	stopCleanup  chan struct{}
 	cleanupDone  sync.WaitGroup
+	stopped      bool
 }
 
 // ClientLimit tracks rate limiting for a single client
@@ -54,90 +56,43 @@ func NewRateLimiterWithContext(ctx context.Context) *RateLimiter {
 }
 
 // Allow checks if client can send a message (100 per minute limit)
-// PERFORMANCE FIX: Use RWMutex pattern - read lock first, upgrade to write lock only when needed
+// Simplified single-lock approach for classroom environments
 func (rl *RateLimiter) Allow(userID string) bool {
-	now := time.Now()
-	
-	// First, try with read lock for existing clients
-	rl.mu.RLock()
-	limit, exists := rl.clients[userID]
-	if exists {
-		// Check if we can proceed with just read lock (window hasn't expired and under limit)
-		if now.Sub(limit.windowStart) < time.Minute && limit.messageCount < 100 {
-			rl.mu.RUnlock()
-			
-			// Upgrade to write lock for the increment
-			rl.mu.Lock()
-			defer rl.mu.Unlock()
-			
-			// Recheck after acquiring write lock (double-checked locking pattern)
-			if now.Sub(limit.windowStart) < time.Minute && limit.messageCount < 100 {
-				limit.messageCount++
-				return true
-			}
-			// Fall through to handle window reset or rate limit exceeded
-			if now.Sub(limit.windowStart) >= time.Minute {
-				limit.messageCount = 1
-				limit.windowStart = now
-				return true
-			}
-			return false // Rate limit exceeded
-		}
-		
-		// Window expired, need write lock for reset
-		if now.Sub(limit.windowStart) >= time.Minute {
-			rl.mu.RUnlock()
-			rl.mu.Lock()
-			defer rl.mu.Unlock()
-			
-			// Recheck after acquiring write lock
-			if now.Sub(limit.windowStart) >= time.Minute {
-				limit.messageCount = 1
-				limit.windowStart = now
-				return true
-			}
-			// Window was reset by another goroutine, check limit
-			if limit.messageCount < 100 {
-				limit.messageCount++
-				return true
-			}
-			return false
-		}
-		
-		// Rate limit exceeded
-		rl.mu.RUnlock()
-		return false
-	}
-	rl.mu.RUnlock()
-	
-	// New client - need write lock
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	
-	// Double-check after acquiring write lock
-	limit, exists = rl.clients[userID]
-	if !exists {
-		// FUNCTIONAL DISCOVERY: First message always allowed, initialize tracking
-		rl.clients[userID] = &ClientLimit{
-			messageCount: 1,
-			windowStart:  now,
-		}
-		return true
-	}
+	now := time.Now()
+	limit := rl.getOrCreateLimitUnsafe(userID, now)
 	
-	// Client was added by another goroutine, apply normal logic
+	// Reset window if expired
 	if now.Sub(limit.windowStart) >= time.Minute {
-		limit.messageCount = 1
 		limit.windowStart = now
+		limit.messageCount = 1
 		return true
 	}
 	
+	// Check rate limit
 	if limit.messageCount >= 100 {
 		return false
 	}
 	
 	limit.messageCount++
 	return true
+}
+
+// getOrCreateLimitUnsafe gets or creates a client limit (must be called with lock held)
+func (rl *RateLimiter) getOrCreateLimitUnsafe(userID string, now time.Time) *ClientLimit {
+	if limit, exists := rl.clients[userID]; exists {
+		return limit
+	}
+	
+	// Create new limit for first-time user
+	limit := &ClientLimit{
+		messageCount: 0,
+		windowStart:  now,
+	}
+	rl.clients[userID] = limit
+	return limit
 }
 
 // Cleanup removes old client entries (manual cleanup)
@@ -202,6 +157,14 @@ func (rl *RateLimiter) autoCleanupWithContext(ctx context.Context) {
 // Stop gracefully stops the rate limiter and cleanup goroutine
 // RESOURCE CLEANUP: Ensure proper cleanup goroutine termination
 func (rl *RateLimiter) Stop() {
+	rl.mu.Lock()
+	if rl.stopped {
+		rl.mu.Unlock()
+		return
+	}
+	rl.stopped = true
+	rl.mu.Unlock()
+	
 	close(rl.stopCleanup)
 	rl.cleanupDone.Wait()
 }

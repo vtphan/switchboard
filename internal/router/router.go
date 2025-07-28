@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,13 +13,20 @@ import (
 	"switchboard/internal/websocket"
 )
 
+// MessageRateLimiter defines the interface for rate limiting
+// ARCHITECTURAL DISCOVERY: Interface segregation allows different rate limiting strategies
+type MessageRateLimiter interface {
+	Allow(userID string) bool
+}
+
 // Router implements the MessageRouter interface
 // ARCHITECTURAL DISCOVERY: Pure message routing logic without session management or connection handling
 // maintains clean separation between routing decisions and message delivery mechanisms
 type Router struct {
 	registry    *websocket.Registry
 	dbManager   interfaces.DatabaseManager
-	rateLimiter *RateLimiter
+	rateLimiter MessageRateLimiter  // INTERFACE DISCOVERY: Allows pluggable rate limiting strategies
+	batcher     *MessageBatcher     // ARCHITECTURAL DISCOVERY: Optional batching for async persistence
 }
 
 // NewRouter creates a new message router
@@ -27,7 +35,7 @@ func NewRouter(registry *websocket.Registry, dbManager interfaces.DatabaseManage
 	return &Router{
 		registry:    registry,
 		dbManager:   dbManager,
-		rateLimiter: NewRateLimiter(),
+		rateLimiter: NewTokenRateLimiter(), // PERFORMANCE IMPROVEMENT: Token bucket eliminates mutex contention
 	}
 }
 
@@ -68,80 +76,108 @@ func (r *Router) RouteMessage(ctx context.Context, message *types.Message) error
 		return ErrRateLimitExceeded
 	}
 	
-	// Persist message first (persist-then-route pattern)
-	// TIMEOUT FIX: Add database timeout to prevent routing delays
-	if r.dbManager != nil {
-		// Create timeout context for database operation (5 seconds max)
-		dbCtx, dbCancel := context.WithTimeout(ctx, 5*time.Second)
-		defer dbCancel()
-		
-		if err := r.dbManager.StoreMessage(dbCtx, message); err != nil {
-			return fmt.Errorf("failed to persist message: %w", err)
-		}
-	}
-	
-	// Get recipients based on message type
-	recipients, err := r.GetRecipients(message)
-	if err != nil {
+	// Route message immediately for real-time delivery
+	if err := r.routeMessageToConnections(message); err != nil {
 		return err
 	}
 	
-	// Deliver to all recipients
-	// FUNCTIONAL DISCOVERY: Continue delivery to other recipients even if one fails
-	// TECHNICAL DISCOVERY: Need to get actual connections for message delivery
-	for _, recipientClient := range recipients {
-		if conn, exists := r.registry.GetUserConnection(recipientClient.ID); exists {
-			if err := conn.WriteJSON(message); err != nil {
-				// Log error but continue delivery to other recipients
-				log.Printf("Failed to deliver message to %s: %v", recipientClient.ID, err)
-			}
-		}
-	}
+	// FUNCTIONAL DISCOVERY: Async persistence doesn't block real-time routing
+	// Persist message asynchronously
+	r.persistMessageAsync(message)
 	
 	return nil
 }
 
-// GetRecipients determines recipients based on message type
-// FUNCTIONAL DISCOVERY: Three distinct routing patterns based on message type and role relationships
-// ARCHITECTURAL DISCOVERY: Interface requires Client slice, conversion from Connection slice needed
-func (r *Router) GetRecipients(message *types.Message) ([]*types.Client, error) {
+// routeMessageToConnections routes message with parallel delivery optimization
+func (r *Router) routeMessageToConnections(message *types.Message) error {
 	sessionID := message.SessionID
+	
+	var connections []*websocket.Connection
 	
 	switch message.Type {
 	case types.MessageTypeInstructorInbox, types.MessageTypeRequestResponse, types.MessageTypeAnalytics:
 		// Route to all instructors in session
-		// ARCHITECTURAL DISCOVERY: Broadcast pattern for messages that all instructors should see
-		connections := r.registry.GetSessionInstructors(sessionID)
-		return r.convertConnectionsToClients(connections), nil
+		connections = r.registry.GetSessionInstructors(sessionID)
 		
 	case types.MessageTypeInboxResponse, types.MessageTypeRequest:
 		// Route to specific student
-		// FUNCTIONAL DISCOVERY: Direct messaging requires recipient validation within session
 		if message.ToUser == nil {
-			return nil, ErrMissingRecipient
+			return ErrMissingRecipient
 		}
 		
 		recipient, exists := r.registry.GetUserConnection(*message.ToUser)
 		if !exists {
-			return nil, ErrRecipientNotFound
+			return ErrRecipientNotFound
 		}
 		
 		// Verify recipient is in the same session
-		// ARCHITECTURAL DISCOVERY: Session boundaries enforced at routing level
 		if recipient.GetSessionID() != sessionID {
-			return nil, ErrRecipientNotInSession
+			return ErrRecipientNotInSession
 		}
 		
-		return r.convertConnectionsToClients([]*websocket.Connection{recipient}), nil
+		connections = []*websocket.Connection{recipient}
 		
 	case types.MessageTypeInstructorBroadcast:
 		// Route to all students in session
-		// FUNCTIONAL DISCOVERY: Instructor broadcast pattern for classroom announcements
-		connections := r.registry.GetSessionStudents(sessionID)
-		return r.convertConnectionsToClients(connections), nil
+		connections = r.registry.GetSessionStudents(sessionID)
 		
 	default:
-		return nil, ErrInvalidMessageType
+		return ErrInvalidMessageType
+	}
+	
+	// Optimized delivery: single recipient vs broadcast
+	return r.deliverToConnections(connections, message)
+}
+
+// deliverToConnections handles both single and parallel delivery optimally
+func (r *Router) deliverToConnections(connections []*websocket.Connection, message *types.Message) error {
+	if len(connections) == 0 {
+		return nil
+	}
+	
+	// Single recipient - direct delivery (no goroutine overhead)
+	if len(connections) == 1 {
+		if err := connections[0].WriteJSON(message); err != nil {
+			log.Printf("Failed to deliver message to %s: %v", connections[0].GetUserID(), err)
+			// Don't return connection errors as routing errors - message was successfully routed
+			if err == websocket.ErrConnectionClosed || err == websocket.ErrWriteTimeout {
+				return nil
+			}
+			return err
+		}
+		return nil
+	}
+	
+	// Multiple recipients - parallel delivery for optimal performance
+	var wg sync.WaitGroup
+	errorChan := make(chan error, len(connections))
+	
+	for _, conn := range connections {
+		wg.Add(1)
+		go func(c *websocket.Connection) {
+			defer wg.Done()
+			if err := c.WriteJSON(message); err != nil {
+				log.Printf("Failed to deliver message to %s: %v", c.GetUserID(), err)
+				// Only report non-connection errors as routing errors
+				if err != websocket.ErrConnectionClosed && err != websocket.ErrWriteTimeout {
+					select {
+					case errorChan <- err:
+					default: // Don't block if channel is full
+					}
+				}
+			}
+		}(conn)
+	}
+	
+	wg.Wait()
+	close(errorChan)
+	
+	// Return first non-connection error if any occurred
+	select {
+	case err := <-errorChan:
+		return err
+	default:
+		return nil
 	}
 }
 
@@ -224,15 +260,78 @@ func (r *Router) isValidMessageType(messageType string) bool {
 	return false
 }
 
-// convertConnectionsToClients converts websocket connections to client representations
-// ARCHITECTURAL DISCOVERY: Interface abstraction requires type conversion for clean boundaries
-func (r *Router) convertConnectionsToClients(connections []*websocket.Connection) []*types.Client {
-	clients := make([]*types.Client, len(connections))
-	for i, conn := range connections {
-		clients[i] = &types.Client{
-			ID:   conn.GetUserID(),
-			Role: conn.GetRole(),
+
+// EnableBatching enables message batching for async persistence
+// ARCHITECTURAL DISCOVERY: Batching reduces database write overhead for high-volume scenarios
+func (r *Router) EnableBatching(batchSize int, flushInterval time.Duration) error {
+	if r.dbManager == nil {
+		return fmt.Errorf("database manager required for batching")
+	}
+	
+	// Create batcher that implements BatchStore using database manager
+	store := &databaseBatchStore{dbManager: r.dbManager}
+	r.batcher = NewMessageBatcher(store, batchSize, flushInterval)
+	
+	// Start the batcher
+	return r.batcher.Start(context.Background())
+}
+
+// SetBatchStore sets a custom batch store (for testing)
+func (r *Router) SetBatchStore(store BatchStore) {
+	if r.batcher != nil {
+		if err := r.batcher.Stop(); err != nil {
+			log.Printf("Failed to stop existing batcher: %v", err)
 		}
 	}
-	return clients
+	r.batcher = NewMessageBatcher(store, 50, 100*time.Millisecond)
+}
+
+// GetBatcherMetrics returns batcher metrics if batching is enabled
+func (r *Router) GetBatcherMetrics() BatchMetrics {
+	if r.batcher == nil {
+		return BatchMetrics{}
+	}
+	return r.batcher.GetMetrics()
+}
+
+// persistMessageAsync handles asynchronous message persistence
+// FUNCTIONAL DISCOVERY: Falls back to direct persistence if batching not enabled
+func (r *Router) persistMessageAsync(message *types.Message) {
+	if r.batcher != nil {
+		// Use batcher for async persistence
+		if err := r.batcher.Add(message); err != nil {
+			// If batcher fails, fall back to direct persistence
+			log.Printf("Batcher failed, falling back to direct persistence: %v", err)
+			r.persistMessageDirect(message)
+		}
+	} else {
+		// Direct persistence as fallback
+		r.persistMessageDirect(message)
+	}
+}
+
+// persistMessageDirect handles direct message persistence
+// TECHNICAL DISCOVERY: Async goroutine prevents blocking routing
+func (r *Router) persistMessageDirect(message *types.Message) {
+	if r.dbManager == nil {
+		return
+	}
+	
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		
+		if err := r.dbManager.StoreMessage(ctx, message); err != nil {
+			log.Printf("Failed to persist message %s: %v", message.ID, err)
+		}
+	}()
+}
+
+// databaseBatchStore adapts DatabaseManager to BatchStore interface
+type databaseBatchStore struct {
+	dbManager interfaces.DatabaseManager
+}
+
+func (d *databaseBatchStore) StoreMessageBatch(ctx context.Context, messages []*types.Message) error {
+	return d.dbManager.StoreMessageBatch(ctx, messages)
 }
