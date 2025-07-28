@@ -75,7 +75,11 @@ func (m *Manager) writeLoop() {
 	
 	for {
 		select {
-		case op := <-m.writeChannel:
+		case op, ok := <-m.writeChannel:
+			if !ok {
+				// Channel was closed, exit writeLoop
+				return
+			}
 			// FUNCTIONAL DISCOVERY: Retry logic exactly once after 5 seconds as specified
 			err := op.operation(m.db)
 			if err != nil {
@@ -380,6 +384,68 @@ func (m *Manager) GetSessionHistory(ctx context.Context, sessionID string) ([]*t
 	}
 	
 	return messages, nil
+}
+
+// StoreMessageBatch stores multiple messages in a single transaction for efficiency
+// ARCHITECTURAL DISCOVERY: Single transaction reduces database write overhead significantly
+func (m *Manager) StoreMessageBatch(ctx context.Context, messages []*types.Message) error {
+	// FUNCTIONAL DISCOVERY: Empty batch should not fail
+	if len(messages) == 0 {
+		return nil
+	}
+	
+	return m.executeWrite(func(db *sql.DB) error {
+		// TECHNICAL DISCOVERY: Transaction wraps entire batch for atomicity
+		// Begin transaction for atomic batch insertion
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to begin batch transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }() // TECHNICAL: Always rollback unless commit succeeds
+		
+		// ARCHITECTURAL DISCOVERY: Prepared statement reuse improves performance
+		// Prepare statement for reuse across all messages in batch
+		stmt, err := tx.PrepareContext(ctx, `
+			INSERT INTO messages (id, session_id, type, context, from_user, to_user, content, timestamp)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`)
+		if err != nil {
+			return fmt.Errorf("failed to prepare batch statement: %w", err)
+		}
+		defer func() { _ = stmt.Close() }()
+		
+		// FUNCTIONAL DISCOVERY: Process all messages in batch with consistent error handling
+		for _, message := range messages {
+			// Serialize message content to JSON
+			contentJSON, err := json.Marshal(message.Content)
+			if err != nil {
+				return fmt.Errorf("failed to marshal message content for batch: %w", err)
+			}
+			
+			// Execute prepared statement for this message
+			_, err = stmt.ExecContext(ctx, 
+				message.ID,
+				message.SessionID,
+				message.Type,
+				message.Context,
+				message.FromUser,
+				message.ToUser,
+				string(contentJSON),
+				message.Timestamp,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to insert message %s in batch: %w", message.ID, err)
+			}
+		}
+		
+		// TECHNICAL DISCOVERY: Explicit commit required for transaction completion
+		// Commit the entire batch atomically
+		if err = tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit message batch: %w", err)
+		}
+		
+		return nil
+	})
 }
 
 // HealthCheck validates database connectivity

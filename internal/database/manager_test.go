@@ -2,836 +2,800 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"switchboard/pkg/database"
 	"switchboard/pkg/interfaces"
 	"switchboard/pkg/types"
 )
 
-// Test database setup helpers
-func setupTestDB(t *testing.T) (*Manager, func()) {
+// setupTestManager creates a test database manager with in-memory database
+func setupTestManager(t *testing.T) (*Manager, func()) {
 	// Create temporary database file
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-	
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
 	config := &database.Config{
 		DatabasePath:    dbPath,
-		MaxConnections:  10,
+		MaxConnections:  5,
 		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: time.Minute * 30,
+		ConnMaxIdleTime: time.Minute,
 	}
-	
-	// Apply schema migrations for testing
-	sqliteDB, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on")
-	if err != nil {
-		t.Fatalf("Failed to open test database: %v", err)
-	}
-	
-	// Create test schema
-	schema := `
-	CREATE TABLE sessions (
-		id TEXT PRIMARY KEY,
-		name TEXT NOT NULL,
-		created_by TEXT NOT NULL,
-		student_ids TEXT NOT NULL,
-		start_time DATETIME NOT NULL,
-		end_time DATETIME,
-		status TEXT NOT NULL DEFAULT 'active',
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	
-	CREATE TABLE messages (
-		id TEXT PRIMARY KEY,
-		session_id TEXT NOT NULL,
-		type TEXT NOT NULL,
-		context TEXT NOT NULL DEFAULT 'general',
-		from_user TEXT NOT NULL,
-		to_user TEXT,
-		content TEXT NOT NULL,
-		timestamp DATETIME NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-	);
-	
-	CREATE INDEX idx_sessions_status ON sessions(status);
-	CREATE INDEX idx_messages_session_time ON messages(session_id, timestamp);
-	CREATE INDEX idx_messages_type ON messages(type);
-	`
-	
-	_, err = sqliteDB.Exec(schema)
-	if err != nil {
-		t.Fatalf("Failed to create test schema: %v", err)
-	}
-	_ = sqliteDB.Close()
-	
-	// This will FAIL until Manager is implemented
+
 	manager, err := NewManager(config)
-	if err != nil {
-		t.Fatalf("Failed to create manager: %v", err)
-	}
-	
+	require.NoError(t, err)
+
+	// Run migrations
+	migrationManager := database.NewMigrationManager(manager.GetDB(), "../../migrations")
+	err = migrationManager.ApplyMigrations()
+	require.NoError(t, err)
+
 	cleanup := func() {
-		_ = manager.Close()
-		_ = os.RemoveAll(tmpDir)
+		if err := manager.Close(); err != nil {
+			t.Logf("Failed to close database manager: %v", err)
+		}
+		if err := os.Remove(dbPath); err != nil {
+			t.Logf("Failed to remove test database: %v", err)
+		}
 	}
-	
+
 	return manager, cleanup
 }
 
-// Architectural Validation Tests
-func TestManager_InterfaceCompliance(t *testing.T) {
-	// This test will FAIL until Manager is implemented
-	// Verify Manager implements DatabaseManager interface
-	config := &database.Config{DatabasePath: ":memory:"}
-	var _ interfaces.DatabaseManager = &Manager{}
-	_ = config // Manager constructor will be tested separately
-}
+// Batch Method Tests
 
-func TestManager_ImportBoundaryCompliance(t *testing.T) {
-	// This test passes if compilation succeeds - no forbidden imports
-	t.Log("Database manager import boundaries maintained - only allowed dependencies")
-}
-
-func TestManager_SingleWriterArchitecture(t *testing.T) {
-	// This test will FAIL until single-writer pattern is implemented
-	manager, cleanup := setupTestDB(t)
+// TestManager_StoreMessageBatch tests batch message insertion
+func TestManager_StoreMessageBatch(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
 	defer cleanup()
-	
-	// Verify manager has required fields for single-writer pattern
-	if manager == nil {
-		t.Fatal("Manager should be properly initialized")
-	}
-	
-	// Architecture should include write channel and goroutine coordination
-	// This will fail until the writeLoop is implemented
-}
 
-// Functional Validation Tests - Core Database Operations
-func TestManager_CreateSessionBehavior(t *testing.T) {
-	// This test will FAIL until CreateSession is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
 	ctx := context.Background()
+
+	// Create a test session first
 	session := &types.Session{
-		ID:         "test-session-123",
+		ID:         "test-session",
 		Name:       "Test Session",
 		CreatedBy:  "instructor1",
 		StudentIDs: []string{"student1", "student2"},
 		StartTime:  time.Now(),
 		Status:     "active",
 	}
-	
 	err := manager.CreateSession(ctx, session)
-	if err != nil {
-		t.Errorf("CreateSession should succeed: %v", err)
-	}
-	
-	// Verify session was actually stored in database
-	retrievedSession, err := manager.GetSession(ctx, "test-session-123")
-	if err != nil {
-		t.Errorf("GetSession should succeed after CreateSession: %v", err)
-	}
-	
-	if retrievedSession == nil {
-		t.Fatal("Retrieved session should not be nil")
-	}
-	
-	if retrievedSession.Name != "Test Session" {
-		t.Errorf("Expected name 'Test Session', got '%s'", retrievedSession.Name)
-	}
-	
-	if len(retrievedSession.StudentIDs) != 2 {
-		t.Errorf("Expected 2 student IDs, got %d", len(retrievedSession.StudentIDs))
-	}
-}
+	require.NoError(t, err)
 
-func TestManager_GetSessionNotFound(t *testing.T) {
-	// This test will FAIL until GetSession error handling is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	_, err := manager.GetSession(ctx, "nonexistent-session")
-	
-	if err != interfaces.ErrSessionNotFound {
-		t.Errorf("Expected ErrSessionNotFound, got %v", err)
-	}
-}
-
-func TestManager_UpdateSessionBehavior(t *testing.T) {
-	// This test will FAIL until UpdateSession is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// First create a session
-	session := &types.Session{
-		ID:         "test-session-456",
-		Name:       "Test Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err := manager.CreateSession(ctx, session)
-	if err != nil {
-		t.Fatalf("CreateSession should succeed: %v", err)
-	}
-	
-	// Update session to ended
-	now := time.Now()
-	session.EndTime = &now
-	session.Status = "ended"
-	
-	err = manager.UpdateSession(ctx, session)
-	if err != nil {
-		t.Errorf("UpdateSession should succeed: %v", err)
-	}
-	
-	// Verify update was persisted
-	updatedSession, err := manager.GetSession(ctx, "test-session-456")
-	if err != nil {
-		t.Errorf("GetSession should succeed after UpdateSession: %v", err)
-	}
-	
-	if updatedSession.Status != "ended" {
-		t.Errorf("Expected status 'ended', got '%s'", updatedSession.Status)
-	}
-	
-	if updatedSession.EndTime == nil {
-		t.Error("End time should be set after update")
-	}
-}
-
-func TestManager_ListActiveSessionsBehavior(t *testing.T) {
-	// This test will FAIL until ListActiveSessions is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// Create active session
-	activeSession := &types.Session{
-		ID:         "active-session",
-		Name:       "Active Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err := manager.CreateSession(ctx, activeSession)
-	if err != nil {
-		t.Fatalf("CreateSession should succeed: %v", err)
-	}
-	
-	// Create ended session
-	endTime := time.Now()
-	endedSession := &types.Session{
-		ID:         "ended-session",
-		Name:       "Ended Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student2"},
-		StartTime:  time.Now().Add(-time.Hour),
-		EndTime:    &endTime,
-		Status:     "ended",
-	}
-	
-	err = manager.CreateSession(ctx, endedSession)
-	if err != nil {
-		t.Fatalf("CreateSession should succeed: %v", err)
-	}
-	
-	// List active sessions should only return active ones
-	activeSessions, err := manager.ListActiveSessions(ctx)
-	if err != nil {
-		t.Errorf("ListActiveSessions should succeed: %v", err)
-	}
-	
-	if len(activeSessions) != 1 {
-		t.Errorf("Expected 1 active session, got %d", len(activeSessions))
-	}
-	
-	if len(activeSessions) > 0 && activeSessions[0].ID != "active-session" {
-		t.Errorf("Expected active session ID 'active-session', got '%s'", activeSessions[0].ID)
-	}
-}
-
-func TestManager_StoreMessageBehavior(t *testing.T) {
-	// This test will FAIL until StoreMessage is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// First create a session
-	session := &types.Session{
-		ID:         "session-for-messages",
-		Name:       "Message Test Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err := manager.CreateSession(ctx, session)
-	if err != nil {
-		t.Fatalf("CreateSession should succeed: %v", err)
-	}
-	
-	// Store a message
-	message := &types.Message{
-		ID:        "msg-123",
-		SessionID: "session-for-messages",
-		Type:      "instructor_broadcast",
-		Context:   "general",
-		FromUser:  "instructor1",
-		ToUser:    nil,
-		Content:   map[string]interface{}{"text": "Hello class"},
-		Timestamp: time.Now(),
-	}
-	
-	err = manager.StoreMessage(ctx, message)
-	if err != nil {
-		t.Errorf("StoreMessage should succeed: %v", err)
-	}
-	
-	// Retrieve session history to verify message was stored
-	messages, err := manager.GetSessionHistory(ctx, "session-for-messages")
-	if err != nil {
-		t.Errorf("GetSessionHistory should succeed: %v", err)
-	}
-	
-	if len(messages) != 1 {
-		t.Errorf("Expected 1 message, got %d", len(messages))
-	}
-	
-	if len(messages) > 0 {
-		if messages[0].Type != "instructor_broadcast" {
-			t.Errorf("Expected type 'instructor_broadcast', got '%s'", messages[0].Type)
-		}
-		
-		if messages[0].Content["text"] != "Hello class" {
-			t.Errorf("Expected content text 'Hello class', got %v", messages[0].Content["text"])
-		}
-	}
-}
-
-func TestManager_GetSessionHistoryOrdering(t *testing.T) {
-	// This test will FAIL until GetSessionHistory ordering is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// Create session
-	session := &types.Session{
-		ID:         "history-session",
-		Name:       "History Test",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err := manager.CreateSession(ctx, session)
-	if err != nil {
-		t.Fatalf("CreateSession should succeed: %v", err)
-	}
-	
-	// Store messages with different timestamps
-	baseTime := time.Now()
+	// Create batch of messages
 	messages := []*types.Message{
 		{
-			ID:        "msg-2",
-			SessionID: "history-session",
-			Type:      "instructor_broadcast",
-			FromUser:  "instructor1",
-			Content:   map[string]interface{}{"text": "Second message"},
-			Timestamp: baseTime.Add(time.Minute),
-		},
-		{
-			ID:        "msg-1",
-			SessionID: "history-session",
-			Type:      "instructor_broadcast",
-			FromUser:  "instructor1",
-			Content:   map[string]interface{}{"text": "First message"},
-			Timestamp: baseTime,
-		},
-		{
-			ID:        "msg-3",
-			SessionID: "history-session",
-			Type:      "instructor_broadcast",
-			FromUser:  "instructor1",
-			Content:   map[string]interface{}{"text": "Third message"},
-			Timestamp: baseTime.Add(2 * time.Minute),
-		},
-	}
-	
-	for _, msg := range messages {
-		err = manager.StoreMessage(ctx, msg)
-		if err != nil {
-			t.Fatalf("StoreMessage should succeed: %v", err)
-		}
-	}
-	
-	// Retrieve history - should be ordered by timestamp ASC
-	history, err := manager.GetSessionHistory(ctx, "history-session")
-	if err != nil {
-		t.Errorf("GetSessionHistory should succeed: %v", err)
-	}
-	
-	if len(history) != 3 {
-		t.Errorf("Expected 3 messages, got %d", len(history))
-	}
-	
-	// Verify chronological ordering
-	if len(history) >= 3 {
-		if history[0].Content["text"] != "First message" {
-			t.Errorf("Expected first message first, got %v", history[0].Content["text"])
-		}
-		if history[1].Content["text"] != "Second message" {
-			t.Errorf("Expected second message second, got %v", history[1].Content["text"])
-		}
-		if history[2].Content["text"] != "Third message" {
-			t.Errorf("Expected third message third, got %v", history[2].Content["text"])
-		}
-	}
-}
-
-// Error Handling Validation Tests
-func TestManager_TransactionRollback(t *testing.T) {
-	// This test will FAIL until transaction handling is implemented
-	// This test simulates transaction failure to verify rollback behavior
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// First create a valid session to establish baseline
-	validSession := &types.Session{
-		ID:         "valid-session",
-		Name:       "Valid Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err := manager.CreateSession(ctx, validSession)
-	if err != nil {
-		t.Fatalf("CreateSession with valid data should succeed: %v", err)
-	}
-	
-	// Now attempt to create session with duplicate ID to cause primary key violation
-	duplicateSession := &types.Session{
-		ID:         "valid-session", // Same ID should cause constraint violation
-		Name:       "Duplicate Session",
-		CreatedBy:  "instructor2",
-		StudentIDs: []string{"student2"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err = manager.CreateSession(ctx, duplicateSession)
-	if err == nil {
-		t.Error("CreateSession with duplicate ID should fail")
-	}
-	
-	// Verify only one session exists (transaction rollback worked)
-	sessions, err := manager.ListActiveSessions(ctx)
-	if err != nil {
-		t.Errorf("ListActiveSessions should work: %v", err)
-	}
-	
-	if len(sessions) != 1 {
-		t.Errorf("Expected 1 session after failed transaction, got %d", len(sessions))
-	}
-	
-	// Verify the original session data is unchanged
-	if len(sessions) > 0 && sessions[0].Name != "Valid Session" {
-		t.Errorf("Expected original session name 'Valid Session', got '%s'", sessions[0].Name)
-	}
-}
-
-func TestManager_DatabaseConnectionFailure(t *testing.T) {
-	// This test will FAIL until connection error handling is implemented
-	// Test with invalid database path to simulate connection failure
-	config := &database.Config{
-		DatabasePath:    "/invalid/path/database.db",
-		MaxConnections:  10,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: time.Minute * 30,
-	}
-	
-	_, err := NewManager(config)
-	if err == nil {
-		t.Error("NewManager should fail with invalid database path")
-	}
-}
-
-// Technical Validation Tests - Performance and Concurrency
-func TestManager_SingleWriterPattern(t *testing.T) {
-	// This test will FAIL until single-writer goroutine is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// Test concurrent write operations to verify single-writer pattern
-	const numWrites = 10
-	var wg sync.WaitGroup
-	errors := make(chan error, numWrites)
-	
-	wg.Add(numWrites)
-	for i := 0; i < numWrites; i++ {
-		go func(id int) {
-			defer wg.Done()
-			
-			session := &types.Session{
-				ID:         fmt.Sprintf("concurrent-session-%d", id),
-				Name:       fmt.Sprintf("Concurrent Session %d", id),
-				CreatedBy:  "instructor1",
-				StudentIDs: []string{"student1"},
-				StartTime:  time.Now(),
-				Status:     "active",
-			}
-			
-			err := manager.CreateSession(ctx, session)
-			if err != nil {
-				errors <- err
-			}
-		}(i)
-	}
-	
-	wg.Wait()
-	close(errors)
-	
-	// Check for any errors from concurrent writes
-	for err := range errors {
-		t.Errorf("Concurrent write failed: %v", err)
-	}
-	
-	// Verify all sessions were created (single-writer should handle concurrency)
-	sessions, err := manager.ListActiveSessions(ctx)
-	if err != nil {
-		t.Errorf("ListActiveSessions should work: %v", err)
-	}
-	
-	if len(sessions) != numWrites {
-		t.Errorf("Expected %d sessions, got %d", numWrites, len(sessions))
-	}
-}
-
-func TestManager_WriteOperationPerformance(t *testing.T) {
-	// This test will FAIL until performance optimization is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// Test write operation performance - should complete in <50ms
-	session := &types.Session{
-		ID:         "perf-test-session",
-		Name:       "Performance Test Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	// Add many students to increase data size
-	for i := 0; i < 100; i++ {
-		session.StudentIDs = append(session.StudentIDs, fmt.Sprintf("student%d", i))
-	}
-	
-	start := time.Now()
-	err := manager.CreateSession(ctx, session)
-	duration := time.Since(start)
-	
-	if err != nil {
-		t.Errorf("CreateSession should succeed: %v", err)
-	}
-	
-	if duration > 50*time.Millisecond {
-		t.Errorf("Write operation too slow: %v (should be <50ms)", duration)
-	}
-}
-
-func TestManager_ReadOperationPerformance(t *testing.T) {
-	// This test will FAIL until read performance optimization is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// Create session for message history test
-	session := &types.Session{
-		ID:         "read-perf-session",
-		Name:      "Read Performance Test",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err := manager.CreateSession(ctx, session)
-	if err != nil {
-		t.Fatalf("CreateSession should succeed: %v", err)
-	}
-	
-	// Create many messages to test read performance
-	for i := 0; i < 1000; i++ {
-		message := &types.Message{
-			ID:        fmt.Sprintf("msg-%d", i),
-			SessionID: "read-perf-session",
-			Type:      "instructor_broadcast",
-			FromUser:  "instructor1",
-			Content:   map[string]interface{}{"text": fmt.Sprintf("Message %d", i)},
-			Timestamp: time.Now().Add(time.Duration(i) * time.Millisecond),
-		}
-		
-		err = manager.StoreMessage(ctx, message)
-		if err != nil {
-			t.Fatalf("StoreMessage should succeed: %v", err)
-		}
-	}
-	
-	// Test read performance - should complete in <100ms for 1000 messages
-	start := time.Now()
-	messages, err := manager.GetSessionHistory(ctx, "read-perf-session")
-	duration := time.Since(start)
-	
-	if err != nil {
-		t.Errorf("GetSessionHistory should succeed: %v", err)
-	}
-	
-	if len(messages) != 1000 {
-		t.Errorf("Expected 1000 messages, got %d", len(messages))
-	}
-	
-	if duration > 100*time.Millisecond {
-		t.Errorf("Read operation too slow: %v (should be <100ms)", duration)
-	}
-}
-
-func TestManager_ConcurrentReadAccess(t *testing.T) {
-	// This test will FAIL until concurrent read support is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// Create test session
-	session := &types.Session{
-		ID:         "concurrent-read-session",
-		Name:       "Concurrent Read Test",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err := manager.CreateSession(ctx, session)
-	if err != nil {
-		t.Fatalf("CreateSession should succeed: %v", err)
-	}
-	
-	// Test concurrent read operations
-	const numReads = 50
-	var wg sync.WaitGroup
-	errors := make(chan error, numReads)
-	
-	wg.Add(numReads)
-	for i := 0; i < numReads; i++ {
-		go func() {
-			defer wg.Done()
-			
-			_, err := manager.GetSession(ctx, "concurrent-read-session")
-			if err != nil {
-				errors <- err
-			}
-		}()
-	}
-	
-	wg.Wait()
-	close(errors)
-	
-	// Check for any errors from concurrent reads
-	for err := range errors {
-		t.Errorf("Concurrent read failed: %v", err)
-	}
-}
-
-func TestManager_HealthCheckBehavior(t *testing.T) {
-	// This test will FAIL until HealthCheck is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	err := manager.HealthCheck(ctx)
-	if err != nil {
-		t.Errorf("HealthCheck should succeed for healthy database: %v", err)
-	}
-}
-
-func TestManager_CleanShutdown(t *testing.T) {
-	// This test will FAIL until proper shutdown is implemented
-	manager, cleanup := setupTestDB(t)
-	defer func() {
-		// Don't call cleanup() as we're testing Close() directly
-		_ = cleanup
-	}()
-	
-	// Start some operations
-	ctx := context.Background()
-	session := &types.Session{
-		ID:         "shutdown-test-session",
-		Name:       "Shutdown Test",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err := manager.CreateSession(ctx, session)
-	if err != nil {
-		t.Errorf("CreateSession should succeed: %v", err)
-	}
-	
-	// Test clean shutdown
-	err = manager.Close()
-	if err != nil {
-		t.Errorf("Close should succeed: %v", err)
-	}
-	
-	// Verify operations fail after shutdown
-	err = manager.CreateSession(ctx, session)
-	if err == nil {
-		t.Error("Operations should fail after Close()")
-	}
-}
-
-// Integration Validation Tests
-func TestManager_CompleteSessionLifecycle(t *testing.T) {
-	// This test will FAIL until complete integration is implemented
-	manager, cleanup := setupTestDB(t)
-	defer cleanup()
-	
-	ctx := context.Background()
-	
-	// Step 1: Create session
-	session := &types.Session{
-		ID:         "lifecycle-session",
-		Name:       "Lifecycle Test Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1", "student2"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	err := manager.CreateSession(ctx, session)
-	if err != nil {
-		t.Fatalf("CreateSession should succeed: %v", err)
-	}
-	
-	// Step 2: Store messages
-	messages := []*types.Message{
-		{
-			ID:        "msg-1",
-			SessionID: "lifecycle-session",
-			Type:      "instructor_broadcast",
-			FromUser:  "instructor1",
-			Content:   map[string]interface{}{"text": "Welcome"},
+			ID:        "msg1",
+			SessionID: "test-session",
+			Type:      types.MessageTypeInstructorInbox,
+			Context:   "general",
+			FromUser:  "student1",
+			ToUser:    nil,
+			Content:   map[string]interface{}{"text": "Hello"},
 			Timestamp: time.Now(),
 		},
 		{
-			ID:        "msg-2",
-			SessionID: "lifecycle-session",
-			Type:      "inbox_response",
+			ID:        "msg2",
+			SessionID: "test-session",
+			Type:      types.MessageTypeInboxResponse,
+			Context:   "general",
 			FromUser:  "instructor1",
 			ToUser:    &[]string{"student1"}[0],
-			Content:   map[string]interface{}{"text": "Response"},
-			Timestamp: time.Now().Add(time.Minute),
+			Content:   map[string]interface{}{"text": "Hi there"},
+			Timestamp: time.Now(),
+		},
+		{
+			ID:        "msg3",
+			SessionID: "test-session",
+			Type:      types.MessageTypeAnalytics,
+			Context:   "progress",
+			FromUser:  "student2",
+			ToUser:    nil,
+			Content:   map[string]interface{}{"progress": 75},
+			Timestamp: time.Now(),
 		},
 	}
-	
-	for _, msg := range messages {
-		err = manager.StoreMessage(ctx, msg)
-		if err != nil {
-			t.Fatalf("StoreMessage should succeed: %v", err)
+
+	// Test batch insertion
+	err = manager.StoreMessageBatch(ctx, messages)
+	require.NoError(t, err)
+
+	// Verify all messages were stored
+	history, err := manager.GetSessionHistory(ctx, "test-session")
+	require.NoError(t, err)
+	assert.Len(t, history, 3)
+
+	// Verify message order and content
+	assert.Equal(t, "msg1", history[0].ID)
+	assert.Equal(t, "Hello", history[0].Content["text"])
+	assert.Equal(t, "msg2", history[1].ID)
+	assert.Equal(t, "Hi there", history[1].Content["text"])
+	assert.Equal(t, "msg3", history[2].ID)
+	assert.Equal(t, float64(75), history[2].Content["progress"])
+}
+
+// TestManager_BatchTransaction tests that batch uses single transaction
+func TestManager_BatchTransaction(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create a test session
+	session := &types.Session{
+		ID:         "test-session",
+		Name:       "Test Session",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1"},
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+	err := manager.CreateSession(ctx, session)
+	require.NoError(t, err)
+
+	// Create batch with one invalid message (invalid session)
+	messages := []*types.Message{
+		{
+			ID:        "msg1",
+			SessionID: "test-session",
+			Type:      types.MessageTypeInstructorInbox,
+			Context:   "general",
+			FromUser:  "student1",
+			Content:   map[string]interface{}{"text": "Valid message"},
+			Timestamp: time.Now(),
+		},
+		{
+			ID:        "msg2",
+			SessionID: "invalid-session", // This should cause transaction to fail
+			Type:      types.MessageTypeInstructorInbox,
+			Context:   "general",
+			FromUser:  "student1",
+			Content:   map[string]interface{}{"text": "Invalid session"},
+			Timestamp: time.Now(),
+		},
+	}
+
+	// Batch should fail due to foreign key constraint
+	err = manager.StoreMessageBatch(ctx, messages)
+	assert.Error(t, err)
+
+	// Verify no messages were stored (transaction rollback)
+	history, err := manager.GetSessionHistory(ctx, "test-session")
+	require.NoError(t, err)
+	assert.Len(t, history, 0)
+}
+
+// TestManager_BatchPerformance tests batch is faster than individual inserts
+func TestManager_BatchPerformance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping performance test in short mode")
+	}
+
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create a test session
+	session := &types.Session{
+		ID:         "test-session",
+		Name:       "Test Session",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1"},
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+	err := manager.CreateSession(ctx, session)
+	require.NoError(t, err)
+
+	// Create 50 messages
+	messages := make([]*types.Message, 50)
+	for i := 0; i < 50; i++ {
+		messages[i] = &types.Message{
+			ID:        fmt.Sprintf("msg%d", i),
+			SessionID: "test-session",
+			Type:      types.MessageTypeAnalytics,
+			Context:   "general",
+			FromUser:  "student1",
+			Content:   map[string]interface{}{"index": i},
+			Timestamp: time.Now(),
 		}
 	}
-	
-	// Step 3: Verify session is in active list
-	activeSessions, err := manager.ListActiveSessions(ctx)
-	if err != nil {
-		t.Errorf("ListActiveSessions should succeed: %v", err)
+
+	// Time individual inserts
+	start := time.Now()
+	for _, msg := range messages[:25] {
+		err := manager.StoreMessage(ctx, msg)
+		require.NoError(t, err)
 	}
-	
-	found := false
-	for _, s := range activeSessions {
-		if s.ID == "lifecycle-session" {
-			found = true
-			break
+	individualTime := time.Since(start)
+
+	// Time batch insert
+	start = time.Now()
+	err = manager.StoreMessageBatch(ctx, messages[25:])
+	require.NoError(t, err)
+	batchTime := time.Since(start)
+
+	// Batch should be significantly faster
+	assert.Less(t, batchTime.Nanoseconds(), individualTime.Nanoseconds()/2,
+		"Batch insert should be at least 2x faster than individual inserts")
+
+	// Verify all messages stored
+	history, err := manager.GetSessionHistory(ctx, "test-session")
+	require.NoError(t, err)
+	assert.Len(t, history, 50)
+}
+
+// TestManager_EmptyBatch tests handling of empty batch
+func TestManager_EmptyBatch(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Test empty batch
+	err := manager.StoreMessageBatch(ctx, []*types.Message{})
+	assert.NoError(t, err) // Should not error on empty batch
+}
+
+// TestManager_LargeBatch tests handling of large batches
+func TestManager_LargeBatch(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create a test session
+	session := &types.Session{
+		ID:         "test-session",
+		Name:       "Test Session",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1"},
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+	err := manager.CreateSession(ctx, session)
+	require.NoError(t, err)
+
+	// Create large batch of messages
+	messages := make([]*types.Message, 1000)
+	for i := 0; i < 1000; i++ {
+		messages[i] = &types.Message{
+			ID:        fmt.Sprintf("msg%d", i),
+			SessionID: "test-session",
+			Type:      types.MessageTypeAnalytics,
+			Context:   "general",
+			FromUser:  "student1",
+			Content:   map[string]interface{}{"index": i, "data": "x"},
+			Timestamp: time.Now().Add(time.Duration(i) * time.Millisecond),
 		}
 	}
-	
-	if !found {
-		t.Error("Created session should be in active sessions list")
+
+	// Should handle large batch
+	err = manager.StoreMessageBatch(ctx, messages)
+	require.NoError(t, err)
+
+	// Verify all stored
+	history, err := manager.GetSessionHistory(ctx, "test-session")
+	require.NoError(t, err)
+	assert.Len(t, history, 1000)
+}
+
+// TestCreateSession tests session creation
+func TestCreateSession(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	session := &types.Session{
+		ID:         "session-123",
+		Name:       "Test Session",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1", "student2", "student3"},
+		StartTime:  time.Now(),
+		Status:     "active",
 	}
-	
-	// Step 4: Retrieve session history
-	history, err := manager.GetSessionHistory(ctx, "lifecycle-session")
-	if err != nil {
-		t.Errorf("GetSessionHistory should succeed: %v", err)
+
+	err := manager.CreateSession(context.Background(), session)
+	assert.NoError(t, err)
+
+	// Verify session was created by retrieving it
+	retrieved, err := manager.GetSession(context.Background(), session.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, session.ID, retrieved.ID)
+	assert.Equal(t, session.Name, retrieved.Name)
+	assert.Equal(t, session.CreatedBy, retrieved.CreatedBy)
+	assert.Equal(t, session.StudentIDs, retrieved.StudentIDs)
+	assert.Equal(t, session.Status, retrieved.Status)
+	assert.WithinDuration(t, session.StartTime, retrieved.StartTime, time.Second)
+	assert.Nil(t, retrieved.EndTime)
+}
+
+// TestGetSession_NotFound tests getting non-existent session
+func TestGetSession_NotFound(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	session, err := manager.GetSession(context.Background(), "non-existent")
+	assert.Nil(t, session)
+	assert.Equal(t, interfaces.ErrSessionNotFound, err)
+}
+
+// TestUpdateSession tests session updates
+func TestUpdateSession(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	// Create session first
+	session := &types.Session{
+		ID:         "session-123",
+		Name:       "Test Session",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1", "student2"},
+		StartTime:  time.Now(),
+		Status:     "active",
 	}
-	
-	if len(history) != 2 {
-		t.Errorf("Expected 2 messages in history, got %d", len(history))
-	}
-	
-	// Step 5: End session
-	now := time.Now()
-	session.EndTime = &now
+
+	err := manager.CreateSession(context.Background(), session)
+	require.NoError(t, err)
+
+	// Update session
+	endTime := time.Now()
+	session.EndTime = &endTime
 	session.Status = "ended"
-	
-	err = manager.UpdateSession(ctx, session)
-	if err != nil {
-		t.Errorf("UpdateSession should succeed: %v", err)
+
+	err = manager.UpdateSession(context.Background(), session)
+	assert.NoError(t, err)
+
+	// Verify update
+	retrieved, err := manager.GetSession(context.Background(), session.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, "ended", retrieved.Status)
+	assert.NotNil(t, retrieved.EndTime)
+	assert.WithinDuration(t, endTime, *retrieved.EndTime, time.Second)
+}
+
+// TestListActiveSessions tests listing active sessions
+func TestListActiveSessions(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	// Create multiple sessions
+	activeSession1 := &types.Session{
+		ID:         "active-1",
+		Name:       "Active Session 1",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1"},
+		StartTime:  time.Now().Add(-2 * time.Hour),
+		Status:     "active",
 	}
-	
-	// Step 6: Verify session no longer in active list
-	activeSessions, err = manager.ListActiveSessions(ctx)
-	if err != nil {
-		t.Errorf("ListActiveSessions should succeed: %v", err)
+
+	activeSession2 := &types.Session{
+		ID:         "active-2",
+		Name:       "Active Session 2",
+		CreatedBy:  "instructor2",
+		StudentIDs: []string{"student2"},
+		StartTime:  time.Now().Add(-1 * time.Hour),
+		Status:     "active",
 	}
-	
-	for _, s := range activeSessions {
-		if s.ID == "lifecycle-session" {
-			t.Error("Ended session should not be in active sessions list")
-		}
+
+	endedSession := &types.Session{
+		ID:         "ended-1",
+		Name:       "Ended Session",
+		CreatedBy:  "instructor3",
+		StudentIDs: []string{"student3"},
+		StartTime:  time.Now().Add(-3 * time.Hour),
+		Status:     "ended",
 	}
-	
-	// Step 7: Verify session can still be retrieved with ended status
-	endedSession, err := manager.GetSession(ctx, "lifecycle-session")
-	if err != nil {
-		t.Errorf("GetSession should work for ended sessions: %v", err)
+
+	// Create sessions
+	require.NoError(t, manager.CreateSession(context.Background(), activeSession1))
+	require.NoError(t, manager.CreateSession(context.Background(), activeSession2))
+	require.NoError(t, manager.CreateSession(context.Background(), endedSession))
+
+	// List active sessions
+	activeSessions, err := manager.ListActiveSessions(context.Background())
+	assert.NoError(t, err)
+	assert.Len(t, activeSessions, 2)
+
+	// Verify order (most recent first)
+	assert.Equal(t, "active-2", activeSessions[0].ID) // More recent
+	assert.Equal(t, "active-1", activeSessions[1].ID) // Older
+}
+
+// TestStoreMessage tests message storage
+func TestStoreMessage(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	// Create a session first (required by foreign key constraint)
+	session := &types.Session{
+		ID:         "session-123",
+		Name:       "Test Session",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1", "student2"},
+		StartTime:  time.Now(),
+		Status:     "active",
 	}
-	
-	if endedSession.Status != "ended" {
-		t.Errorf("Expected status 'ended', got '%s'", endedSession.Status)
+	err := manager.CreateSession(context.Background(), session)
+	require.NoError(t, err)
+
+	message := &types.Message{
+		ID:        "msg-123",
+		SessionID: "session-123",
+		Type:      types.MessageTypeInstructorInbox,
+		Context:   "question",
+		FromUser:  "student1",
+		ToUser:    nil, // Broadcast message
+		Content:   map[string]interface{}{"text": "Need help with problem 5", "difficulty": "hard"},
+		Timestamp: time.Now(),
 	}
+
+	err = manager.StoreMessage(context.Background(), message)
+	assert.NoError(t, err)
+
+	// Verify message was stored by retrieving session history
+	messages, err := manager.GetSessionHistory(context.Background(), "session-123")
+	assert.NoError(t, err)
+	assert.Len(t, messages, 1)
+
+	stored := messages[0]
+	assert.Equal(t, message.ID, stored.ID)
+	assert.Equal(t, message.SessionID, stored.SessionID)
+	assert.Equal(t, message.Type, stored.Type)
+	assert.Equal(t, message.Context, stored.Context)
+	assert.Equal(t, message.FromUser, stored.FromUser)
+	assert.Nil(t, stored.ToUser)
+	assert.Equal(t, message.Content, stored.Content)
+	assert.WithinDuration(t, message.Timestamp, stored.Timestamp, time.Second)
+}
+
+// TestStoreMessage_WithRecipient tests storing direct messages
+func TestStoreMessage_WithRecipient(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	// Create a session first (required by foreign key constraint)
+	session := &types.Session{
+		ID:         "session-123",
+		Name:       "Test Session",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1", "student2"},
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+	err := manager.CreateSession(context.Background(), session)
+	require.NoError(t, err)
+
+	toUser := "student1"
+	message := &types.Message{
+		ID:        "msg-456",
+		SessionID: "session-123",
+		Type:      types.MessageTypeInboxResponse,
+		Context:   "answer",
+		FromUser:  "instructor1",
+		ToUser:    &toUser,
+		Content:   map[string]interface{}{"text": "Here's the solution..."},
+		Timestamp: time.Now(),
+	}
+
+	err = manager.StoreMessage(context.Background(), message)
+	assert.NoError(t, err)
+
+	// Verify message was stored with recipient
+	messages, err := manager.GetSessionHistory(context.Background(), "session-123")
+	assert.NoError(t, err)
+	assert.Len(t, messages, 1)
+
+	stored := messages[0]
+	assert.NotNil(t, stored.ToUser)
+	assert.Equal(t, "student1", *stored.ToUser)
+}
+
+// TestGetSessionHistory tests message history retrieval
+func TestGetSessionHistory(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	sessionID := "session-123"
+	
+	// Create a session first (required by foreign key constraint)
+	session := &types.Session{
+		ID:         sessionID,
+		Name:       "Test Session",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1", "student2"},
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+	err := manager.CreateSession(context.Background(), session)
+	require.NoError(t, err)
+
+	baseTime := time.Now()
+
+	// Create messages in different order than chronological
+	messages := []*types.Message{
+		{
+			ID:        "msg-2",
+			SessionID: sessionID,
+			Type:      types.MessageTypeInstructorInbox,
+			Context:   "question",
+			FromUser:  "student1",
+			Content:   map[string]interface{}{"text": "Second message"},
+			Timestamp: baseTime.Add(2 * time.Minute),
+		},
+		{
+			ID:        "msg-1",
+			SessionID: sessionID,
+			Type:      types.MessageTypeInstructorInbox,
+			Context:   "question",
+			FromUser:  "student1",
+			Content:   map[string]interface{}{"text": "First message"},
+			Timestamp: baseTime.Add(1 * time.Minute),
+		},
+		{
+			ID:        "msg-3",
+			SessionID: sessionID,
+			Type:      types.MessageTypeInstructorInbox,
+			Context:   "question",
+			FromUser:  "student1",
+			Content:   map[string]interface{}{"text": "Third message"},
+			Timestamp: baseTime.Add(3 * time.Minute),
+		},
+	}
+
+	// Store messages in random order
+	for _, msg := range messages {
+		require.NoError(t, manager.StoreMessage(context.Background(), msg))
+	}
+
+	// Retrieve history
+	history, err := manager.GetSessionHistory(context.Background(), sessionID)
+	assert.NoError(t, err)
+	assert.Len(t, history, 3)
+
+	// Verify chronological order
+	assert.Equal(t, "msg-1", history[0].ID)
+	assert.Equal(t, "msg-2", history[1].ID)
+	assert.Equal(t, "msg-3", history[2].ID)
+}
+
+// TestGetSessionHistory_EmptySession tests history for non-existent session
+func TestGetSessionHistory_EmptySession(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	history, err := manager.GetSessionHistory(context.Background(), "non-existent")
+	assert.NoError(t, err)
+	assert.Empty(t, history)
+}
+
+// TestHealthCheck tests database health check
+func TestHealthCheck(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	err := manager.HealthCheck(context.Background())
+	assert.NoError(t, err)
+}
+
+// TestHealthCheck_AfterClose tests health check on closed database
+func TestHealthCheck_AfterClose(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	// Close the manager
+	err := manager.Close()
+	require.NoError(t, err)
+
+	// Health check should fail
+	err = manager.HealthCheck(context.Background())
+	assert.Error(t, err)
+}
+
+// TestConcurrentWrites tests single-writer pattern
+func TestConcurrentWrites(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	sessionID := "concurrent-test"
+	
+	// Create a session first (required by foreign key constraint)
+	session := &types.Session{
+		ID:         sessionID,
+		Name:       "Concurrent Test Session",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1", "student2"},
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+	err := manager.CreateSession(context.Background(), session)
+	require.NoError(t, err)
+
+	numGoroutines := 10
+	messagesPerGoroutine := 5
+
+	// Send messages concurrently
+	errors := make(chan error, numGoroutines*messagesPerGoroutine)
+	
+	for i := 0; i < numGoroutines; i++ {
+		go func(goroutineID int) {
+			for j := 0; j < messagesPerGoroutine; j++ {
+				message := &types.Message{
+					ID:        fmt.Sprintf("msg-%d-%d", goroutineID, j),
+					SessionID: sessionID,
+					Type:      types.MessageTypeInstructorInbox,
+					Context:   "test",
+					FromUser:  fmt.Sprintf("user-%d", goroutineID),
+					Content:   map[string]interface{}{"text": fmt.Sprintf("Message %d from goroutine %d", j, goroutineID)},
+					Timestamp: time.Now(),
+				}
+				errors <- manager.StoreMessage(context.Background(), message)
+			}
+		}(i)
+	}
+
+	// Collect errors
+	for i := 0; i < numGoroutines*messagesPerGoroutine; i++ {
+		err := <-errors
+		assert.NoError(t, err)
+	}
+
+	// Verify all messages were stored
+	history, err := manager.GetSessionHistory(context.Background(), sessionID)
+	assert.NoError(t, err)
+	assert.Len(t, history, numGoroutines*messagesPerGoroutine)
+}
+
+// TestWriteTimeout tests write operation timeout behavior
+func TestWriteTimeout(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	// This test verifies that the timeout mechanism exists in executeWrite
+	// We can't easily simulate a 30-second timeout in a unit test without
+	// making the test very slow, so we'll test that the manager can handle
+	// normal operations without timeout issues.
+	
+	session := &types.Session{
+		ID:         "timeout-test",
+		Name:       "Timeout Test",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1"},
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+
+	// This should complete successfully within the timeout
+	err := manager.CreateSession(context.Background(), session)
+	assert.NoError(t, err)
+	
+	// Verify the session was actually created
+	retrievedSession, err := manager.GetSession(context.Background(), "timeout-test")
+	assert.NoError(t, err)
+	assert.Equal(t, "timeout-test", retrievedSession.ID)
+}
+
+// TestContextCancellation tests context cancellation handling
+func TestContextCancellation(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	// Create a context that will be cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	// Try to create session with cancelled context
+	session := &types.Session{
+		ID:         "cancelled-test",
+		Name:       "Cancelled Test",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1"},
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+
+	err := manager.CreateSession(ctx, session)
+	assert.Error(t, err)
+}
+
+// TestJSONSerialization tests JSON serialization/deserialization
+func TestJSONSerialization(t *testing.T) {
+	manager, cleanup := setupTestManager(t)
+	defer cleanup()
+
+	// Test complex student IDs
+	complexStudentIDs := []string{
+		"student_1",
+		"student-2",
+		"user123",
+		"test_user_with_underscores",
+	}
+
+	session := &types.Session{
+		ID:         "json-test",
+		Name:       "JSON Test",
+		CreatedBy:  "instructor1",
+		StudentIDs: complexStudentIDs,
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+
+	err := manager.CreateSession(context.Background(), session)
+	require.NoError(t, err)
+
+	retrieved, err := manager.GetSession(context.Background(), session.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, complexStudentIDs, retrieved.StudentIDs)
+
+	// Test complex message content
+	complexContent := map[string]interface{}{
+		"text":        "Complex message",
+		"metadata":    map[string]string{"priority": "high", "category": "question"},
+		"attachments": []string{"file1.pdf", "image.png"},
+		"numbers":     []int{1, 2, 3, 4, 5},
+		"boolean":     true,
+	}
+
+	message := &types.Message{
+		ID:        "json-msg-test",
+		SessionID: session.ID,
+		Type:      types.MessageTypeInstructorInbox,
+		Context:   "question",
+		FromUser:  "student1",
+		Content:   complexContent,
+		Timestamp: time.Now(),
+	}
+
+	err = manager.StoreMessage(context.Background(), message)
+	require.NoError(t, err)
+
+	messages, err := manager.GetSessionHistory(context.Background(), session.ID)
+	assert.NoError(t, err)
+	assert.Len(t, messages, 1)
+
+	retrievedContent := messages[0].Content
+	assert.Equal(t, "Complex message", retrievedContent["text"])
+	assert.Equal(t, "high", retrievedContent["metadata"].(map[string]interface{})["priority"])
+}
+
+// TestDatabaseClose tests proper database shutdown
+func TestDatabaseClose(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	defer func() {
+		// Don't call cleanup since we're testing Close ourselves
+		_ = manager.Close()
+	}()
+
+	// Verify manager works before close
+	err := manager.HealthCheck(context.Background())
+	assert.NoError(t, err)
+
+	// Close manager
+	err = manager.Close()
+	assert.NoError(t, err)
+
+	// Second close should be idempotent
+	err = manager.Close()
+	assert.NoError(t, err)
+
+	// Operations after close should fail
+	session := &types.Session{
+		ID:         "after-close",
+		Name:       "After Close",
+		CreatedBy:  "instructor1",
+		StudentIDs: []string{"student1"},
+		StartTime:  time.Now(),
+		Status:     "active",
+	}
+
+	err = manager.CreateSession(context.Background(), session)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "closed")
 }

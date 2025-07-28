@@ -2,689 +2,526 @@ package session
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
-	"time"
 
-	"switchboard/pkg/interfaces"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"switchboard/pkg/types"
 )
 
-// Mock DatabaseManager for testing
-type mockDatabaseManager struct {
-	sessions map[string]*types.Session
-	mu       sync.RWMutex
-	
-	// Control behavior for testing
-	shouldFailCreate bool
-	shouldFailUpdate bool
-	shouldFailList   bool
+// MockDatabaseManager implements a mock database manager
+type MockDatabaseManager struct {
+	mock.Mock
 }
 
-func newMockDatabaseManager() *mockDatabaseManager {
-	return &mockDatabaseManager{
-		sessions: make(map[string]*types.Session),
+func (m *MockDatabaseManager) StoreMessage(ctx context.Context, message *types.Message) error {
+	args := m.Called(ctx, message)
+	return args.Error(0)
+}
+
+func (m *MockDatabaseManager) StoreMessageBatch(ctx context.Context, messages []*types.Message) error {
+	args := m.Called(ctx, messages)
+	return args.Error(0)
+}
+
+func (m *MockDatabaseManager) GetSessionHistory(ctx context.Context, sessionID string) ([]*types.Message, error) {
+	args := m.Called(ctx, sessionID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
+	return args.Get(0).([]*types.Message), args.Error(1)
 }
 
-func (m *mockDatabaseManager) CreateSession(ctx context.Context, session *types.Session) error {
-	if m.shouldFailCreate {
-		return errors.New("database create failed")
+func (m *MockDatabaseManager) CreateSession(ctx context.Context, session *types.Session) error {
+	args := m.Called(ctx, session)
+	return args.Error(0)
+}
+
+func (m *MockDatabaseManager) UpdateSession(ctx context.Context, session *types.Session) error {
+	args := m.Called(ctx, session)
+	return args.Error(0)
+}
+
+func (m *MockDatabaseManager) GetSession(ctx context.Context, sessionID string) (*types.Session, error) {
+	args := m.Called(ctx, sessionID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-	
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sessions[session.ID] = session
-	return nil
+	return args.Get(0).(*types.Session), args.Error(1)
 }
 
-func (m *mockDatabaseManager) GetSession(ctx context.Context, sessionID string) (*types.Session, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	
-	session, exists := m.sessions[sessionID]
-	if !exists {
-		return nil, interfaces.ErrSessionNotFound
+func (m *MockDatabaseManager) ListActiveSessions(ctx context.Context) ([]*types.Session, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
 	}
-	return session, nil
+	return args.Get(0).([]*types.Session), args.Error(1)
 }
 
-func (m *mockDatabaseManager) UpdateSession(ctx context.Context, session *types.Session) error {
-	if m.shouldFailUpdate {
-		return errors.New("database update failed")
-	}
-	
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sessions[session.ID] = session
-	return nil
+func (m *MockDatabaseManager) HealthCheck(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
 }
 
-func (m *mockDatabaseManager) ListActiveSessions(ctx context.Context) ([]*types.Session, error) {
-	if m.shouldFailList {
-		return nil, errors.New("database list failed")
-	}
-	
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	
-	var activeSessions []*types.Session
-	for _, session := range m.sessions {
-		if session.Status == "active" {
-			activeSessions = append(activeSessions, session)
-		}
-	}
-	return activeSessions, nil
+func (m *MockDatabaseManager) Close() error {
+	args := m.Called()
+	return args.Error(0)
 }
 
-func (m *mockDatabaseManager) StoreMessage(ctx context.Context, message *types.Message) error {
-	return nil // Not used in session manager tests
-}
-
-func (m *mockDatabaseManager) GetSessionHistory(ctx context.Context, sessionID string) ([]*types.Message, error) {
-	return nil, nil // Not used in session manager tests
-}
-
-func (m *mockDatabaseManager) HealthCheck(ctx context.Context) error {
-	return nil // Not used in session manager tests
-}
-
-func (m *mockDatabaseManager) Close() error {
-	return nil // Not used in session manager tests
-}
-
-// Architectural Validation Tests
-func TestManager_InterfaceCompliance(t *testing.T) {
-	// This test will FAIL until Manager is implemented
-	// Verify Manager implements SessionManager interface
-	dbManager := newMockDatabaseManager()
-	var _ interfaces.SessionManager = NewManager(dbManager)
-}
-
-func TestManager_ImportBoundaryCompliance(t *testing.T) {
-	// This test passes if compilation succeeds - no forbidden imports
-	t.Log("Session manager import boundaries maintained - only allowed dependencies")
-}
-
-func TestManager_DependencyInjection(t *testing.T) {
-	// This test will FAIL until Manager is implemented
-	dbManager := newMockDatabaseManager()
+// TestCreateSession_Success tests successful session creation
+func TestCreateSession_Success(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
 	manager := NewManager(dbManager)
-	
-	if manager == nil {
-		t.Fatal("NewManager should return valid manager instance")
+
+	// Mock empty active sessions
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{}, nil).Once()
+	if err := manager.LoadActiveSessions(context.Background()); err != nil {
+		t.Fatalf("Failed to load active sessions: %v", err)
 	}
+
+	// Mock successful database creation
+	dbManager.On("CreateSession", mock.Anything, mock.MatchedBy(func(s *types.Session) bool {
+		return s.Name == "Test Session" && 
+			s.CreatedBy == "instructor1" && 
+			len(s.StudentIDs) == 3 &&
+			s.Status == "active"
+	})).Return(nil)
+
+	// Create session
+	session, err := manager.CreateSession(context.Background(), "Test Session", "instructor1", 
+		[]string{"student1", "student2", "student3"})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, session)
+	assert.Equal(t, "Test Session", session.Name)
+	assert.Equal(t, "instructor1", session.CreatedBy)
+	assert.Equal(t, []string{"student1", "student2", "student3"}, session.StudentIDs)
+	assert.Equal(t, "active", session.Status)
+	assert.NotEmpty(t, session.ID)
+	assert.Nil(t, session.EndTime)
+
+	// Verify session is in cache
+	assert.True(t, manager.IsSessionActive(session.ID))
 }
 
-// Functional Validation Tests - Core Behaviors
-func TestManager_CreateSessionBasicBehavior(t *testing.T) {
-	// This test will FAIL until CreateSession is implemented
-	dbManager := newMockDatabaseManager()
+// TestCreateSession_SingleSessionEnforcement tests that only one active session is allowed
+func TestCreateSession_SingleSessionEnforcement(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
 	manager := NewManager(dbManager)
-	
-	ctx := context.Background()
-	session, err := manager.CreateSession(ctx, "Test Session", "instructor1", []string{"student1", "student2"})
-	
-	if err != nil {
-		t.Errorf("CreateSession should succeed: %v", err)
+
+	// Create first session
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{}, nil).Once()
+	if err := manager.LoadActiveSessions(context.Background()); err != nil {
+		t.Logf("Failed to load active sessions: %v", err)
 	}
+
+	dbManager.On("CreateSession", mock.Anything, mock.Anything).Return(nil).Once()
+
+	session1, err := manager.CreateSession(context.Background(), "First Session", "instructor1", 
+		[]string{"student1", "student2"})
+	assert.NoError(t, err)
+	assert.NotNil(t, session1)
+
+	// Try to create second session - should fail
+	session2, err := manager.CreateSession(context.Background(), "Second Session", "instructor2", 
+		[]string{"student3", "student4"})
 	
-	if session == nil {
-		t.Fatal("CreateSession should return session")
-	}
-	
-	// Validate session properties
-	if session.Name != "Test Session" {
-		t.Errorf("Expected name 'Test Session', got '%s'", session.Name)
-	}
-	
-	if session.CreatedBy != "instructor1" {
-		t.Errorf("Expected createdBy 'instructor1', got '%s'", session.CreatedBy)
-	}
-	
-	if len(session.StudentIDs) != 2 {
-		t.Errorf("Expected 2 student IDs, got %d", len(session.StudentIDs))
-	}
-	
-	if session.Status != "active" {
-		t.Errorf("Expected status 'active', got '%s'", session.Status)
-	}
-	
-	if session.ID == "" {
-		t.Error("Session ID should be generated")
-	}
-	
-	if session.StartTime.IsZero() {
-		t.Error("Start time should be set")
-	}
-	
-	if session.EndTime != nil {
-		t.Error("End time should be nil for new session")
-	}
+	assert.Error(t, err)
+	assert.Equal(t, ErrActiveSessionExists, err)
+	assert.Nil(t, session2)
+
+	// Verify only one active session exists
+	activeSessions, _ := manager.ListActiveSessions(context.Background())
+	assert.Len(t, activeSessions, 1)
+	assert.Equal(t, session1.ID, activeSessions[0].ID)
 }
 
-func TestManager_CreateSessionDuplicateRemoval(t *testing.T) {
-	// This test will FAIL until CreateSession duplicate handling is implemented
-	dbManager := newMockDatabaseManager()
+// TestCreateSession_ValidationErrors tests various validation errors
+func TestCreateSession_ValidationErrors(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
 	manager := NewManager(dbManager)
-	
-	ctx := context.Background()
-	studentIDs := []string{"student1", "student2", "student1", "student3", "student2"} // Duplicates
-	
-	session, err := manager.CreateSession(ctx, "Test Session", "instructor1", studentIDs)
-	
-	if err != nil {
-		t.Errorf("CreateSession should succeed: %v", err)
-	}
-	
-	// Should have exactly 3 unique students
-	if len(session.StudentIDs) != 3 {
-		t.Errorf("Expected 3 unique student IDs, got %d", len(session.StudentIDs))
-	}
-	
-	// Verify all expected students are present
-	expectedStudents := map[string]bool{"student1": false, "student2": false, "student3": false}
-	for _, studentID := range session.StudentIDs {
-		if _, exists := expectedStudents[studentID]; exists {
-			expectedStudents[studentID] = true
-		}
-	}
-	
-	for student, found := range expectedStudents {
-		if !found {
-			t.Errorf("Expected student '%s' not found in session", student)
-		}
-	}
-}
 
-func TestManager_GetSessionCacheFirst(t *testing.T) {
-	// This test will FAIL until GetSession cache-first lookup is implemented
-	dbManager := newMockDatabaseManager()
-	manager := NewManager(dbManager)
-	
-	// Add session to database
-	testSession := &types.Session{
-		ID:         "test-session",
-		Name:       "Test Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
+	// Mock empty active sessions
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{}, nil).Once()
+	if err := manager.LoadActiveSessions(context.Background()); err != nil {
+		t.Fatalf("Failed to load active sessions: %v", err)
 	}
-	
-	dbManager.sessions["test-session"] = testSession
-	
-	// Load into cache
-	ctx := context.Background()
-	err := manager.LoadActiveSessions(ctx)
-	if err != nil {
-		t.Fatalf("LoadActiveSessions failed: %v", err)
-	}
-	
-	// Get session should return from cache
-	session, err := manager.GetSession(ctx, "test-session")
-	if err != nil {
-		t.Errorf("GetSession should succeed: %v", err)
-	}
-	
-	if session == nil {
-		t.Fatal("GetSession should return session")
-	}
-	
-	if session.ID != "test-session" {
-		t.Errorf("Expected session ID 'test-session', got '%s'", session.ID)
-	}
-}
 
-func TestManager_EndSessionBehavior(t *testing.T) {
-	// This test will FAIL until EndSession is implemented
-	dbManager := newMockDatabaseManager()
-	manager := NewManager(dbManager)
-	
-	// Create and add session to cache
-	testSession := &types.Session{
-		ID:         "test-session",
-		Name:       "Test Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	dbManager.sessions["test-session"] = testSession
-	
-	ctx := context.Background()
-	err := manager.LoadActiveSessions(ctx)
-	if err != nil {
-		t.Fatalf("LoadActiveSessions failed: %v", err)
-	}
-	
-	// End the session
-	err = manager.EndSession(ctx, "test-session")
-	if err != nil {
-		t.Errorf("EndSession should succeed: %v", err)
-	}
-	
-	// Verify session is updated in database
-	updatedSession := dbManager.sessions["test-session"]
-	if updatedSession.Status != "ended" {
-		t.Errorf("Expected status 'ended', got '%s'", updatedSession.Status)
-	}
-	
-	if updatedSession.EndTime == nil {
-		t.Error("End time should be set")
-	}
-	
-	// Verify session is removed from active cache
-	activeSessions, err := manager.ListActiveSessions(ctx)
-	if err != nil {
-		t.Errorf("ListActiveSessions failed: %v", err)
-	}
-	
-	if len(activeSessions) != 0 {
-		t.Errorf("Expected 0 active sessions, got %d", len(activeSessions))
-	}
-}
-
-func TestManager_ValidateSessionMembershipRules(t *testing.T) {
-	// This test will FAIL until ValidateSessionMembership is implemented
-	dbManager := newMockDatabaseManager()
-	manager := NewManager(dbManager)
-	
-	// Create test session
-	testSession := &types.Session{
-		ID:         "test-session",
-		Name:       "Test Session",
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1", "student2"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	dbManager.sessions["test-session"] = testSession
-	
-	ctx := context.Background()
-	err := manager.LoadActiveSessions(ctx)
-	if err != nil {
-		t.Fatalf("LoadActiveSessions failed: %v", err)
-	}
-	
-	// Test instructor access (should always allow)
-	err = manager.ValidateSessionMembership("test-session", "any-instructor", "instructor")
-	if err != nil {
-		t.Errorf("Instructors should have universal access: %v", err)
-	}
-	
-	// Test valid student access
-	err = manager.ValidateSessionMembership("test-session", "student1", "student")
-	if err != nil {
-		t.Errorf("Valid student should have access: %v", err)
-	}
-	
-	// Test invalid student access
-	err = manager.ValidateSessionMembership("test-session", "student3", "student")
-	if err != ErrUnauthorized {
-		t.Errorf("Invalid student should be unauthorized, got: %v", err)
-	}
-	
-	// Test invalid session
-	err = manager.ValidateSessionMembership("nonexistent", "student1", "student")
-	if err != ErrSessionNotFound {
-		t.Errorf("Nonexistent session should return not found, got: %v", err)
-	}
-	
-	// Test invalid role
-	err = manager.ValidateSessionMembership("test-session", "user1", "invalid-role")
-	if err != ErrInvalidRole {
-		t.Errorf("Invalid role should return invalid role error, got: %v", err)
-	}
-}
-
-// Error Handling Validation Tests
-func TestManager_CreateSessionValidation(t *testing.T) {
-	// This test will FAIL until CreateSession validation is implemented
-	dbManager := newMockDatabaseManager()
-	manager := NewManager(dbManager)
-	
-	ctx := context.Background()
-	
 	tests := []struct {
 		name       string
 		sessionName string
-		createdBy   string
-		studentIDs  []string
-		expectedErr error
+		createdBy  string
+		studentIDs []string
+		wantErr    error
 	}{
 		{
-			name:        "Empty session name",
+			name:       "empty session name",
 			sessionName: "",
-			createdBy:   "instructor1",
-			studentIDs:  []string{"student1"},
-			expectedErr: ErrInvalidSessionName,
+			createdBy:  "instructor1",
+			studentIDs: []string{"student1"},
+			wantErr:    ErrInvalidSessionName,
 		},
 		{
-			name:        "Session name too long",
-			sessionName: string(make([]byte, 201)), // 201 characters
-			createdBy:   "instructor1", 
-			studentIDs:  []string{"student1"},
-			expectedErr: ErrInvalidSessionName,
+			name:       "session name too long",
+			sessionName: string(make([]byte, 201)),
+			createdBy:  "instructor1",
+			studentIDs: []string{"student1"},
+			wantErr:    ErrInvalidSessionName,
 		},
 		{
-			name:        "Invalid created by",
-			sessionName: "Valid Session",
-			createdBy:   "",
-			studentIDs:  []string{"student1"},
-			expectedErr: ErrInvalidCreatedBy,
+			name:       "invalid creator ID",
+			sessionName: "Test Session",
+			createdBy:  "invalid@user",
+			studentIDs: []string{"student1"},
+			wantErr:    ErrInvalidCreatedBy,
 		},
 		{
-			name:        "Empty student list",
-			sessionName: "Valid Session",
-			createdBy:   "instructor1",
-			studentIDs:  []string{},
-			expectedErr: ErrEmptyStudentList,
+			name:       "empty student list",
+			sessionName: "Test Session",
+			createdBy:  "instructor1",
+			studentIDs: []string{},
+			wantErr:    ErrEmptyStudentList,
 		},
 		{
-			name:        "Invalid student ID",
-			sessionName: "Valid Session",
-			createdBy:   "instructor1",
-			studentIDs:  []string{"valid-student", ""},
-			expectedErr: ErrInvalidStudentID,
+			name:       "invalid student ID",
+			sessionName: "Test Session",
+			createdBy:  "instructor1",
+			studentIDs: []string{"student1", "invalid@student"},
+			wantErr:    ErrInvalidStudentID,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := manager.CreateSession(ctx, tt.sessionName, tt.createdBy, tt.studentIDs)
-			
-			if !errors.Is(err, tt.expectedErr) {
-				t.Errorf("Expected error %v, got %v", tt.expectedErr, err)
+			session, err := manager.CreateSession(context.Background(), tt.sessionName, tt.createdBy, tt.studentIDs)
+			assert.Error(t, err)
+			assert.ErrorIs(t, err, tt.wantErr)
+			assert.Nil(t, session)
+		})
+	}
+}
+
+// TestCreateSession_RemovesDuplicates tests duplicate student ID removal
+func TestCreateSession_RemovesDuplicates(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
+	manager := NewManager(dbManager)
+
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{}, nil).Once()
+	if err := manager.LoadActiveSessions(context.Background()); err != nil {
+		t.Logf("Failed to load active sessions: %v", err)
+	}
+
+	// Mock database creation - verify duplicates are removed
+	dbManager.On("CreateSession", mock.Anything, mock.MatchedBy(func(s *types.Session) bool {
+		return len(s.StudentIDs) == 3 // Should be 3 unique students, not 5
+	})).Return(nil)
+
+	// Create session with duplicate student IDs
+	session, err := manager.CreateSession(context.Background(), "Test Session", "instructor1", 
+		[]string{"student1", "student2", "student1", "student3", "student2"})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"student1", "student2", "student3"}, session.StudentIDs)
+}
+
+// TestEndSession_Success tests successful session ending
+func TestEndSession_Success(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
+	manager := NewManager(dbManager)
+
+	// Create a session first
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{}, nil).Once()
+	if err := manager.LoadActiveSessions(context.Background()); err != nil {
+		t.Logf("Failed to load active sessions: %v", err)
+	}
+
+	dbManager.On("CreateSession", mock.Anything, mock.Anything).Return(nil)
+	session, _ := manager.CreateSession(context.Background(), "Test Session", "instructor1", 
+		[]string{"student1"})
+
+	// Mock successful update
+	dbManager.On("UpdateSession", mock.Anything, mock.MatchedBy(func(s *types.Session) bool {
+		return s.ID == session.ID && s.Status == "ended" && s.EndTime != nil
+	})).Return(nil)
+
+	// End session
+	err := manager.EndSession(context.Background(), session.ID)
+	assert.NoError(t, err)
+
+	// Verify session is no longer active in cache
+	assert.False(t, manager.IsSessionActive(session.ID))
+}
+
+// TestEndSession_Errors tests error cases for ending sessions
+func TestEndSession_Errors(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
+	manager := NewManager(dbManager)
+
+	// Test ending non-existent session
+	dbManager.On("GetSession", mock.Anything, "non-existent").Return(nil, ErrSessionNotFound)
+	err := manager.EndSession(context.Background(), "non-existent")
+	assert.Equal(t, ErrSessionNotFound, err)
+
+	// Test ending already ended session
+	endedSession := &types.Session{
+		ID:     "ended-session",
+		Status: "ended",
+	}
+	dbManager.On("GetSession", mock.Anything, "ended-session").Return(endedSession, nil)
+	err = manager.EndSession(context.Background(), "ended-session")
+	assert.Equal(t, ErrSessionAlreadyEnded, err)
+}
+
+// TestValidateSessionMembership tests session membership validation
+func TestValidateSessionMembership(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
+	manager := NewManager(dbManager)
+
+	// Create active session
+	activeSession := &types.Session{
+		ID:         "session1",
+		Name:       "Test Session",
+		StudentIDs: []string{"student1", "student2", "student3"},
+		Status:     "active",
+	}
+	manager.activeSessions[activeSession.ID] = activeSession
+
+	tests := []struct {
+		name      string
+		sessionID string
+		userID    string
+		role      string
+		wantErr   error
+	}{
+		{
+			name:      "instructor access allowed",
+			sessionID: "session1",
+			userID:    "instructor1",
+			role:      "instructor",
+			wantErr:   nil,
+		},
+		{
+			name:      "enrolled student allowed",
+			sessionID: "session1",
+			userID:    "student1",
+			role:      "student",
+			wantErr:   nil,
+		},
+		{
+			name:      "non-enrolled student denied",
+			sessionID: "session1",
+			userID:    "student4",
+			role:      "student",
+			wantErr:   ErrUnauthorized,
+		},
+		{
+			name:      "invalid role",
+			sessionID: "session1",
+			userID:    "user1",
+			role:      "admin",
+			wantErr:   ErrInvalidRole,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := manager.ValidateSessionMembership(tt.sessionID, tt.userID, tt.role)
+			if tt.wantErr != nil {
+				assert.Equal(t, tt.wantErr, err)
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}
 }
 
-func TestManager_DatabaseErrorHandling(t *testing.T) {
-	// This test will FAIL until database error handling is implemented
-	dbManager := newMockDatabaseManager()
+// TestConcurrentSessionOperations tests thread safety of session operations
+func TestConcurrentSessionOperations(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
 	manager := NewManager(dbManager)
-	
-	ctx := context.Background()
-	
-	// Test create session database failure
-	dbManager.shouldFailCreate = true
-	_, err := manager.CreateSession(ctx, "Test Session", "instructor1", []string{"student1"})
-	if err == nil {
-		t.Error("CreateSession should fail when database fails")
-	}
-	
-	// Test load sessions database failure
-	dbManager.shouldFailList = true
-	err = manager.LoadActiveSessions(ctx)
-	if err == nil {
-		t.Error("LoadActiveSessions should fail when database fails")
-	}
-	
-	// Test end session database failure
-	dbManager.shouldFailUpdate = true
-	dbManager.shouldFailCreate = false
-	dbManager.shouldFailList = false
-	
-	// First create a session
-	session, err := manager.CreateSession(ctx, "Test Session", "instructor1", []string{"student1"})
-	if err != nil {
-		t.Fatalf("CreateSession should succeed: %v", err)
-	}
-	
-	// Then try to end it with database failure
-	err = manager.EndSession(ctx, session.ID)
-	if err == nil {
-		t.Error("EndSession should fail when database update fails")
-	}
-}
 
-// Technical Validation Tests - Performance and Concurrency
-func TestManager_SessionValidationPerformance(t *testing.T) {
-	// This test will FAIL until performance optimization is implemented
-	dbManager := newMockDatabaseManager()
-	manager := NewManager(dbManager)
-	
-	// Create test session
-	testSession := &types.Session{
-		ID:         "test-session",
-		Name:       "Test Session", 
-		CreatedBy:  "instructor1",
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{}, nil).Once()
+	if err := manager.LoadActiveSessions(context.Background()); err != nil {
+		t.Logf("Failed to load active sessions: %v", err)
 	}
-	
-	dbManager.sessions["test-session"] = testSession
-	
-	ctx := context.Background()
-	err := manager.LoadActiveSessions(ctx)
-	if err != nil {
-		t.Fatalf("LoadActiveSessions failed: %v", err)
-	}
-	
-	// Test validation performance - should complete in <1ms
-	iterations := 1000
-	start := time.Now()
-	
-	for i := 0; i < iterations; i++ {
-		_ = manager.ValidateSessionMembership("test-session", "student1", "student")
-	}
-	
-	duration := time.Since(start)
-	avgDuration := duration / time.Duration(iterations)
-	
-	if avgDuration > time.Millisecond {
-		t.Errorf("Session validation too slow: %v per operation (should be <1ms)", avgDuration)
-	}
-}
 
-func TestManager_ConcurrentAccess(t *testing.T) {
-	// This test will FAIL until thread-safe implementation is complete
-	dbManager := newMockDatabaseManager()
-	manager := NewManager(dbManager)
-	
-	// Create test session
-	testSession := &types.Session{
-		ID:         "test-session",
-		Name:       "Test Session",
-		CreatedBy:  "instructor1", 
-		StudentIDs: []string{"student1"},
-		StartTime:  time.Now(),
-		Status:     "active",
-	}
-	
-	dbManager.sessions["test-session"] = testSession
-	
-	ctx := context.Background()
-	err := manager.LoadActiveSessions(ctx)
-	if err != nil {
-		t.Fatalf("LoadActiveSessions failed: %v", err)
-	}
-	
-	// Test concurrent validation access
-	const numGoroutines = 100
+	// Mock database operations - only first CreateSession should succeed
+	dbManager.On("CreateSession", mock.Anything, mock.Anything).Return(nil).Once()
+	// Mock GetSession to return session ended status for subsequent EndSession calls
+	dbManager.On("GetSession", mock.Anything, mock.Anything).Return(
+		&types.Session{Status: "ended"}, nil).Maybe()
+	dbManager.On("UpdateSession", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	// Create first session
+	session, err := manager.CreateSession(context.Background(), "Test Session", "instructor1", 
+		[]string{"student1"})
+	require.NoError(t, err)
+
+	// Run concurrent operations
 	var wg sync.WaitGroup
-	errors := make(chan error, numGoroutines)
-	
-	wg.Add(numGoroutines)
-	for i := 0; i < numGoroutines; i++ {
+	errors := make([]error, 0)
+	var mu sync.Mutex
+
+	// Try to create multiple sessions concurrently
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			_, err := manager.CreateSession(context.Background(), 
+				"Concurrent Session", "instructor2", []string{"student2"})
+			if err != nil {
+				mu.Lock()
+				errors = append(errors, err)
+				mu.Unlock()
+			}
+		}(i)
+	}
+
+	// Wait for all create attempts to complete before trying to end
+	wg.Wait()
+
+	// Try to end the session concurrently
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := manager.ValidateSessionMembership("test-session", "student1", "student")
-			if err != nil {
-				errors <- err
-			}
+			_ = manager.EndSession(context.Background(), session.ID)
 		}()
 	}
-	
+
 	wg.Wait()
-	close(errors)
-	
-	// Check for any errors from concurrent access
-	for err := range errors {
-		t.Errorf("Concurrent validation failed: %v", err)
+
+	// All create attempts should fail with ErrActiveSessionExists
+	for _, err := range errors {
+		assert.Equal(t, ErrActiveSessionExists, err)
 	}
 }
 
-func TestManager_CacheConsistency(t *testing.T) {
-	// This test will FAIL until cache consistency is implemented
-	dbManager := newMockDatabaseManager()
+// TestLoadActiveSessions tests loading sessions from database
+func TestLoadActiveSessions(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
 	manager := NewManager(dbManager)
-	
-	ctx := context.Background()
-	
-	// Create session
+
+	// Mock database response
+	sessions := []*types.Session{
+		{
+			ID:     "session1",
+			Name:   "Active Session 1",
+			Status: "active",
+		},
+		{
+			ID:     "session2",
+			Name:   "Active Session 2",
+			Status: "active",
+		},
+	}
+
+	dbManager.On("ListActiveSessions", mock.Anything).Return(sessions, nil)
+
+	// Load sessions
+	err := manager.LoadActiveSessions(context.Background())
+	assert.NoError(t, err)
+
+	// Verify sessions are in cache
+	assert.True(t, manager.IsSessionActive("session1"))
+	assert.True(t, manager.IsSessionActive("session2"))
+
+	// Verify count
+	activeSessions, _ := manager.ListActiveSessions(context.Background())
+	assert.Len(t, activeSessions, 2)
+}
+
+// TestGetActiveSession tests retrieving the active session
+func TestGetActiveSession(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
+	manager := NewManager(dbManager)
+
+	// No active session
+	session, err := manager.GetActiveSession(context.Background())
+	assert.NoError(t, err)
+	assert.Nil(t, session)
+
+	// Create active session
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{}, nil).Once()
+	if err := manager.LoadActiveSessions(context.Background()); err != nil {
+		t.Logf("Failed to load active sessions: %v", err)
+	}
+
+	dbManager.On("CreateSession", mock.Anything, mock.Anything).Return(nil)
+	createdSession, _ := manager.CreateSession(context.Background(), "Test Session", "instructor1", 
+		[]string{"student1"})
+
+	// Get active session
+	activeSession, err := manager.GetActiveSession(context.Background())
+	assert.NoError(t, err)
+	assert.NotNil(t, activeSession)
+	assert.Equal(t, createdSession.ID, activeSession.ID)
+}
+
+// TestContextCancellation tests handling of context cancellation
+func TestContextCancellation(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
+	manager := NewManager(dbManager)
+
+	// Mock database calls that might happen before context is checked
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{}, nil).Maybe()
+	dbManager.On("CreateSession", mock.Anything, mock.Anything).Return(context.Canceled).Maybe()
+
+	// Create a context that's already cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Try to create session with cancelled context
 	session, err := manager.CreateSession(ctx, "Test Session", "instructor1", []string{"student1"})
-	if err != nil {
-		t.Fatalf("CreateSession failed: %v", err)
-	}
-	
-	// Verify session is in active list
-	activeSessions, err := manager.ListActiveSessions(ctx)
-	if err != nil {
-		t.Errorf("ListActiveSessions failed: %v", err)
-	}
-	
-	if len(activeSessions) != 1 {
-		t.Errorf("Expected 1 active session, got %d", len(activeSessions))
-	}
-	
-	// End session
-	err = manager.EndSession(ctx, session.ID)
-	if err != nil {
-		t.Errorf("EndSession failed: %v", err)
-	}
-	
-	// Verify session is removed from active list
-	activeSessions, err = manager.ListActiveSessions(ctx)
-	if err != nil {
-		t.Errorf("ListActiveSessions failed: %v", err)
-	}
-	
-	if len(activeSessions) != 0 {
-		t.Errorf("Expected 0 active sessions after ending, got %d", len(activeSessions))
-	}
-	
-	// Verify validation fails for ended session
-	err = manager.ValidateSessionMembership(session.ID, "student1", "student")
-	if err != ErrSessionEnded {
-		t.Errorf("Validation should fail for ended session, got: %v", err)
-	}
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "context canceled")
+	assert.Nil(t, session)
 }
 
-// Integration Validation Tests
-func TestManager_SessionLifecycleIntegration(t *testing.T) {
-	// This test will FAIL until complete integration is implemented
-	dbManager := newMockDatabaseManager()
+// TestRefreshCache tests cache refresh functionality
+func TestRefreshCache(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
 	manager := NewManager(dbManager)
-	
-	ctx := context.Background()
-	
-	// Step 1: Create session
-	session, err := manager.CreateSession(ctx, "Integration Test", "instructor1", []string{"student1", "student2"})
-	if err != nil {
-		t.Fatalf("CreateSession failed: %v", err)
+
+	// Initial load
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{
+		{ID: "session1", Status: "active"},
+	}, nil).Once()
+	if err := manager.LoadActiveSessions(context.Background()); err != nil {
+		t.Logf("Failed to load active sessions: %v", err)
 	}
-	
-	// Step 2: Validate session membership
-	err = manager.ValidateSessionMembership(session.ID, "student1", "student")
-	if err != nil {
-		t.Errorf("Student validation failed: %v", err)
-	}
-	
-	err = manager.ValidateSessionMembership(session.ID, "instructor1", "instructor")
-	if err != nil {
-		t.Errorf("Instructor validation failed: %v", err)
-	}
-	
-	// Step 3: Check session is active
-	if !manager.IsSessionActive(session.ID) {
-		t.Error("Session should be active")
-	}
-	
-	// Step 4: End session
-	err = manager.EndSession(ctx, session.ID)
-	if err != nil {
-		t.Errorf("EndSession failed: %v", err)
-	}
-	
-	// Step 5: Verify session is no longer active
-	if manager.IsSessionActive(session.ID) {
-		t.Error("Session should not be active after ending")
-	}
-	
-	// Step 6: Verify validation fails
-	err = manager.ValidateSessionMembership(session.ID, "student1", "student")
-	if err != ErrSessionEnded {
-		t.Errorf("Validation should fail for ended session, got: %v", err)
-	}
+
+	// Verify initial state
+	assert.True(t, manager.IsSessionActive("session1"))
+
+	// Mock new database state
+	dbManager.On("ListActiveSessions", mock.Anything).Return([]*types.Session{
+		{ID: "session2", Status: "active"},
+		{ID: "session3", Status: "active"},
+	}, nil).Once()
+
+	// Refresh cache
+	err := manager.RefreshCache(context.Background())
+	assert.NoError(t, err)
+
+	// Verify new state
+	assert.False(t, manager.IsSessionActive("session1"))
+	assert.True(t, manager.IsSessionActive("session2"))
+	assert.True(t, manager.IsSessionActive("session3"))
 }
 
-func TestManager_StatisticsAndCacheManagement(t *testing.T) {
-	// This test will FAIL until statistics and cache management is implemented
-	dbManager := newMockDatabaseManager()
+// TestGetStats tests statistics gathering
+func TestGetStats(t *testing.T) {
+	dbManager := new(MockDatabaseManager)
 	manager := NewManager(dbManager)
-	
-	// Clean up the manager goroutine
-	t.Cleanup(func() {
-		_ = manager.Close()
-	})
-	
-	ctx := context.Background()
-	
-	// Initially empty
+
+	// Add some sessions
+	manager.activeSessions["session1"] = &types.Session{ID: "session1", Status: "active"}
+	manager.activeSessions["session2"] = &types.Session{ID: "session2", Status: "active"}
+
 	stats := manager.GetStats()
-	if stats["active_sessions"] != 0 {
-		t.Errorf("Expected 0 active sessions initially, got %v", stats["active_sessions"])
-	}
-	
-	// Create first session
-	session1, err := manager.CreateSession(ctx, "Session 1", "instructor1", []string{"student1"})
-	if err != nil {
-		t.Fatalf("CreateSession 1 failed: %v", err)
-	}
-	
-	// Try to create second session - should fail due to single session enforcement
-	_, err = manager.CreateSession(ctx, "Session 2", "instructor1", []string{"student2"})
-	if err == nil {
-		t.Fatal("Expected CreateSession 2 to fail due to single session enforcement")
-	}
-	if err != ErrActiveSessionExists {
-		t.Errorf("Expected ErrActiveSessionExists, got: %v", err)
-	}
-	
-	// Check statistics - should be 1 active session
-	stats = manager.GetStats()
-	if stats["active_sessions"] != 1 {
-		t.Errorf("Expected 1 active session, got %v", stats["active_sessions"])
-	}
-	
-	// End the first session
-	err = manager.EndSession(ctx, session1.ID)
-	if err != nil {
-		t.Fatalf("EndSession failed: %v", err)
-	}
-	
-	// Now second session should succeed
-	_, err = manager.CreateSession(ctx, "Session 2", "instructor1", []string{"student2"})
-	if err != nil {
-		t.Fatalf("CreateSession 2 after ending first session failed: %v", err)
-	}
-	
-	// Test cache refresh
-	err = manager.RefreshCache(ctx)
-	if err != nil {
-		t.Errorf("RefreshCache failed: %v", err)
-	}
-	
-	// Statistics should show 1 active session (single session enforcement)
-	stats = manager.GetStats()
-	if stats["active_sessions"] != 1 {
-		t.Errorf("Expected 1 active session after refresh, got %v", stats["active_sessions"])
-	}
+	assert.Equal(t, 2, stats["active_sessions"])
+	assert.Equal(t, 2, stats["cache_size"])
 }

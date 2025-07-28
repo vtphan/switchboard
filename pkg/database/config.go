@@ -1,7 +1,6 @@
 package database
 
 import (
-	"database/sql"
 	"errors"
 	"time"
 
@@ -54,25 +53,3 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// SQLite optimization pragmas for classroom scale
-// ARCHITECTURAL DISCOVERY: WAL mode enables concurrent reads while maintaining
-// single-writer pattern required by DatabaseManager implementation
-const sqliteOptimizations = `
-	PRAGMA journal_mode = WAL;          -- Write-Ahead Logging for better concurrency
-	PRAGMA synchronous = NORMAL;        -- Balance between safety and performance  
-	PRAGMA cache_size = -64000;         -- 64MB cache (negative = KB)
-	PRAGMA temp_store = MEMORY;         -- Use memory for temporary tables
-	PRAGMA foreign_keys = ON;           -- Enforce foreign key constraints
-	PRAGMA busy_timeout = 5000;         -- 5 second timeout for locked database
-`
-
-// applySQLiteOptimizations applies performance optimizations to the database connection
-// FUNCTIONAL DISCOVERY: Optimization pragmas must be applied to each connection
-// to ensure consistent performance characteristics across the connection pool
-func applySQLiteOptimizations(db *sql.DB) error {
-	_, err := db.Exec(sqliteOptimizations)
-	if err != nil {
-		return err
-	}
-	return nil
-}

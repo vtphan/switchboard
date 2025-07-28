@@ -42,6 +42,11 @@ type DatabaseManager interface {
 	// to ensure audit trail and message history integrity
 	StoreMessage(ctx context.Context, message *types.Message) error
 
+	// StoreMessageBatch persists multiple messages in a single transaction
+	// ARCHITECTURAL DISCOVERY: Batch operations reduce database write overhead
+	// by amortizing connection and transaction costs across multiple messages
+	StoreMessageBatch(ctx context.Context, messages []*types.Message) error
+
 	// GetSessionHistory retrieves all messages for a session
 	// TECHNICAL DISCOVERY: Returns message slice ordered by timestamp
 	// for efficient history replay during WebSocket connection setup
