@@ -60,7 +60,9 @@ func NewApplication(cfg *config.Config) (*Application, error) {
 	// STEP 1.5: Apply database migrations to ensure schema is up to date
 	migrationManager := pkgdatabase.NewMigrationManager(dbManager.GetDB(), dbConfig.MigrationsPath)
 	if err := migrationManager.ApplyMigrations(); err != nil {
-		dbManager.Close()
+		if closeErr := dbManager.Close(); closeErr != nil {
+			log.Printf("Failed to close database during migration error cleanup: %v", closeErr)
+		}
 		return nil, fmt.Errorf("failed to apply database migrations: %w", err)
 	}
 	log.Println("Database migrations applied successfully")
@@ -134,7 +136,9 @@ func (app *Application) Start(ctx context.Context) error {
 	select {
 	case err := <-serverErrCh:
 		// Cleanup on startup failure
-		app.messageHub.Stop()
+		if stopErr := app.messageHub.Stop(); stopErr != nil {
+			log.Printf("Failed to stop message hub during startup error cleanup: %v", stopErr)
+		}
 		return err
 	case <-time.After(100 * time.Millisecond):
 		// Server started successfully
@@ -142,7 +146,9 @@ func (app *Application) Start(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		// Context cancelled during startup
-		app.messageHub.Stop()
+		if stopErr := app.messageHub.Stop(); stopErr != nil {
+			log.Printf("Failed to stop message hub during context cancellation: %v", stopErr)
+		}
 		return ctx.Err()
 	}
 }

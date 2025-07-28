@@ -267,7 +267,9 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	
 	// FUNCTIONAL DISCOVERY: Return 201 Created with session data
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(CreateSessionResponse{Session: session})
+	if err := json.NewEncoder(w).Encode(CreateSessionResponse{Session: session}); err != nil {
+		log.Printf("Failed to encode session creation response: %v", err)
+	}
 }
 
 // FUNCTIONAL DISCOVERY: GET /api/sessions/{id} - Get session details with connection count
@@ -286,10 +288,12 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, sessionID st
 	connections := s.registry.GetSessionConnections(sessionID)
 	connectionCount := len(connections)
 	
-	json.NewEncoder(w).Encode(SessionResponse{
+	if err := json.NewEncoder(w).Encode(SessionResponse{
 		Session:         session,
 		ConnectionCount: connectionCount,
-	})
+	}); err != nil {
+		log.Printf("Failed to encode session response: %v", err)
+	}
 }
 
 // FUNCTIONAL DISCOVERY: DELETE /api/sessions/{id} - End session
@@ -342,7 +346,9 @@ func (s *Server) endSession(w http.ResponseWriter, r *http.Request, sessionID st
 	
 	// FUNCTIONAL DISCOVERY: Return simple success response
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Session ended successfully"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"message": "Session ended successfully"}); err != nil {
+		log.Printf("Failed to encode session end response: %v", err)
+	}
 }
 
 // FUNCTIONAL DISCOVERY: GET /api/sessions - List active sessions with connection counts
@@ -363,7 +369,9 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	
-	json.NewEncoder(w).Encode(ListSessionsResponse{Sessions: sessionsWithConnections})
+	if err := json.NewEncoder(w).Encode(ListSessionsResponse{Sessions: sessionsWithConnections}); err != nil {
+		log.Printf("Failed to encode sessions list response: %v", err)
+	}
 }
 
 // FUNCTIONAL DISCOVERY: GET /health - System health check with component validation
@@ -405,17 +413,21 @@ func (s *Server) healthCheck(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}
 	
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Failed to encode health check response: %v", err)
+	}
 }
 
 // FUNCTIONAL DISCOVERY: Consistent error response format
 func (s *Server) sendError(w http.ResponseWriter, message string, code int) {
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(ErrorResponse{
+	if err := json.NewEncoder(w).Encode(ErrorResponse{
 		Error:   http.StatusText(code),
 		Code:    code,
 		Message: message,
-	})
+	}); err != nil {
+		log.Printf("Failed to encode error response: %v", err)
+	}
 }
 
 // sendActiveSessionConflictError sends a 409 response with active session details
@@ -439,11 +451,13 @@ func (s *Server) sendActiveSessionConflictError(w http.ResponseWriter, ctx conte
 	message := fmt.Sprintf("Cannot create new session. Active session '%s' must be ended first.", activeSession.Name)
 	
 	w.WriteHeader(http.StatusConflict)
-	json.NewEncoder(w).Encode(ActiveSessionConflictResponse{
+	if err := json.NewEncoder(w).Encode(ActiveSessionConflictResponse{
 		Error:         "Active session exists",
 		Message:       message,
 		ActiveSession: activeSession,
-	})
+	}); err != nil {
+		log.Printf("Failed to encode active session conflict response: %v", err)
+	}
 }
 
 // ARCHITECTURAL DISCOVERY: CORS middleware enables web client access
