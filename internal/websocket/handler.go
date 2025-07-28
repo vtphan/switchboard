@@ -180,7 +180,7 @@ func (h *Handler) sendSessionHistory(conn *Connection) {
 	userID := conn.GetUserID()
 	role := conn.GetRole()
 	
-	// TIMEOUT FIX: Add database timeout for session history retrieval
+	// Standard timeout for history queries
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	messages, err := h.dbManager.GetSessionHistory(ctx, sessionID)

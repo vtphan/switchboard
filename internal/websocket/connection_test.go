@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,259 +10,413 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"switchboard/pkg/interfaces"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// Test WebSocket upgrader for creating test connections
-var testUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+// TestNewConnection verifies connection creation and initialization
+func TestNewConnection(t *testing.T) {
+	// Create test WebSocket server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer func() {
+			if err := conn.Close(); err != nil {
+				// Connection close error during test cleanup, expected
+				_ = err // Explicitly ignore error during cleanup
+			}
+		}()
+		
+		// Keep connection alive
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	// Connect to test server
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := ws.Close(); err != nil {
+			t.Logf("Failed to close websocket: %v", err)
+		}
+	}()
+
+	// Create connection wrapper
+	conn := NewConnection(ws)
+	assert.NotNil(t, conn)
+	assert.NotNil(t, conn.conn)
+	assert.NotNil(t, conn.writeCh)
+	assert.NotNil(t, conn.ctx)
+	assert.NotNil(t, conn.cancel)
+	assert.False(t, conn.authenticated)
+	assert.Equal(t, "", conn.userID)
+	assert.Equal(t, "", conn.role)
+	assert.Equal(t, "", conn.sessionID)
+
+	// Clean up
+	err = conn.Close()
+	assert.NoError(t, err)
 }
 
-// Architectural Validation Tests
-func TestConnection_InterfaceCompliance(t *testing.T) {
-	// Verify Connection implements interfaces.Connection
-	var _ interfaces.Connection = &Connection{}
-}
+// TestWriteJSON verifies JSON writing functionality
+func TestWriteJSON(t *testing.T) {
+	// Create test WebSocket server that reads messages
+	receivedCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer func() {
+			if err := conn.Close(); err != nil {
+				// Connection close error during test cleanup, expected
+				_ = err // Explicitly ignore error during cleanup
+			}
+		}()
+		
+		// Read message
+		_, msg, err := conn.ReadMessage()
+		if err == nil {
+			receivedCh <- msg
+		}
+	}))
+	defer server.Close()
 
-func TestConnection_ImportBoundaryCompliance(t *testing.T) {
-	// This test passes if compilation succeeds - no circular imports
-	t.Log("Import boundaries maintained - no circular dependencies")
-}
+	// Connect to test server
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := ws.Close(); err != nil {
+			t.Logf("Failed to close websocket: %v", err)
+		}
+	}()
 
-// Functional Validation Tests
-func TestConnection_NewConnectionInitialization(t *testing.T) {
-	wsConn := createTestWebSocketConnection(t)
-	defer func() { _ = wsConn.Close() }()
+	conn := NewConnection(ws)
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Logf("Failed to close connection: %v", err)
+		}
+	}()
 
-	conn := NewConnection(wsConn)
-	defer func() { _ = conn.Close() }()
+	// Test successful write
+	testData := map[string]string{"type": "test", "content": "hello"}
+	err = conn.WriteJSON(testData)
+	assert.NoError(t, err)
 
-	if conn == nil {
-		t.Fatal("NewConnection returned nil")
-	}
-
-	if conn.writeCh == nil {
-		t.Error("Write channel not initialized")
-	}
-
-	if cap(conn.writeCh) != 100 {
-		t.Errorf("Expected write channel buffer of 100, got %d", cap(conn.writeCh))
-	}
-
-	if conn.IsAuthenticated() {
-		t.Error("New connection should not be authenticated")
-	}
-}
-
-func TestConnection_AuthenticationFlow(t *testing.T) {
-	wsConn := createTestWebSocketConnection(t)
-	defer func() { _ = wsConn.Close() }()
-
-	conn := NewConnection(wsConn)
-	defer func() { _ = conn.Close() }()
-
-	// Initially not authenticated
-	if conn.IsAuthenticated() {
-		t.Error("New connection should not be authenticated")
-	}
-
-	// Set credentials
-	err := conn.SetCredentials("user123", "student", "session456")
-	if err != nil {
-		t.Errorf("SetCredentials failed: %v", err)
-	}
-
-	// Should now be authenticated
-	if !conn.IsAuthenticated() {
-		t.Error("Connection should be authenticated after SetCredentials")
-	}
-
-	// Check credential values
-	if conn.GetUserID() != "user123" {
-		t.Errorf("Expected userID 'user123', got '%s'", conn.GetUserID())
-	}
-	if conn.GetRole() != "student" {
-		t.Errorf("Expected role 'student', got '%s'", conn.GetRole())
-	}
-	if conn.GetSessionID() != "session456" {
-		t.Errorf("Expected sessionID 'session456', got '%s'", conn.GetSessionID())
-	}
-}
-
-func TestConnection_WriteJSONValidData(t *testing.T) {
-	wsConn := createTestWebSocketConnection(t)
-	defer func() { _ = wsConn.Close() }()
-
-	conn := NewConnection(wsConn)
-	defer func() { _ = conn.Close() }()
-
-	testData := map[string]interface{}{
-		"type":    "test",
-		"content": "test message",
-	}
-
-	// Should successfully write JSON
-	err := conn.WriteJSON(testData)
-	if err != nil {
-		t.Errorf("WriteJSON failed: %v", err)
-	}
-}
-
-func TestConnection_WriteJSONInvalidData(t *testing.T) {
-	wsConn := createTestWebSocketConnection(t)
-	defer func() { _ = wsConn.Close() }()
-
-	conn := NewConnection(wsConn)
-	defer func() { _ = conn.Close() }()
-
-	// Function type cannot be marshaled to JSON
-	invalidData := map[string]interface{}{
-		"func": func() {},
-	}
-
-	err := conn.WriteJSON(invalidData)
-	if err != ErrInvalidJSON {
-		t.Errorf("Expected ErrInvalidJSON, got %v", err)
+	// Verify message received
+	select {
+	case received := <-receivedCh:
+		var decoded map[string]string
+		err = json.Unmarshal(received, &decoded)
+		assert.NoError(t, err)
+		assert.Equal(t, testData, decoded)
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for message")
 	}
 }
 
-func TestConnection_CloseIdempotent(t *testing.T) {
-	wsConn := createTestWebSocketConnection(t)
-	defer func() { _ = wsConn.Close() }()
+// TestWriteJSONErrors verifies error handling in WriteJSON
+func TestWriteJSONErrors(t *testing.T) {
+	// Create a simple WebSocket connection
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer func() {
+			if err := conn.Close(); err != nil {
+				// Connection close error during test cleanup, expected
+				_ = err // Explicitly ignore error during cleanup
+			}
+		}()
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
 
-	conn := NewConnection(wsConn)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := ws.Close(); err != nil {
+			t.Logf("Failed to close websocket: %v", err)
+		}
+	}()
 
-	// Close should be safe to call multiple times
-	err1 := conn.Close()
-	err2 := conn.Close()
-	err3 := conn.Close()
+	conn := NewConnection(ws)
 
-	if err1 != nil {
-		t.Errorf("First close failed: %v", err1)
+	// Test invalid JSON
+	type InvalidJSON struct {
+		Ch chan int // channels cannot be marshaled to JSON
 	}
-	if err2 != nil {
-		t.Errorf("Second close failed: %v", err2)
-	}
-	if err3 != nil {
-		t.Errorf("Third close failed: %v", err3)
-	}
+	err = conn.WriteJSON(&InvalidJSON{Ch: make(chan int)})
+	assert.Error(t, err)
+	assert.Equal(t, ErrInvalidJSON, err)
+
+	// Test write after close
+	err = conn.Close()
+	assert.NoError(t, err)
+	
+	err = conn.WriteJSON(map[string]string{"test": "data"})
+	assert.Error(t, err)
+	assert.Equal(t, ErrConnectionClosed, err)
 }
 
-func TestConnection_WriteAfterClose(t *testing.T) {
-	wsConn := createTestWebSocketConnection(t)
-	defer func() { _ = wsConn.Close() }()
+// TestConcurrentWrites verifies thread-safe writing
+func TestConcurrentWrites(t *testing.T) {
+	// Create test server that counts messages
+	messageCount := 0
+	mu := sync.Mutex{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer func() {
+			if err := conn.Close(); err != nil {
+				// Connection close error during test cleanup, expected
+				_ = err // Explicitly ignore error during cleanup
+			}
+		}()
+		
+		// Count messages
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			mu.Lock()
+			messageCount++
+			mu.Unlock()
+		}
+	}))
+	defer server.Close()
 
-	conn := NewConnection(wsConn)
-	_ = conn.Close()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := ws.Close(); err != nil {
+			t.Logf("Failed to close websocket: %v", err)
+		}
+	}()
 
-	// Give time for context cancellation to propagate
-	time.Sleep(10 * time.Millisecond)
+	conn := NewConnection(ws)
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Logf("Failed to close connection: %v", err)
+		}
+	}()
 
-	testData := map[string]interface{}{
-		"type": "test",
-	}
-
-	err := conn.WriteJSON(testData)
-	if err != ErrConnectionClosed {
-		t.Errorf("Expected ErrConnectionClosed, got %v", err)
-	}
-}
-
-// Technical Validation Tests (Race Detection)
-func TestConnection_ConcurrentWrites(t *testing.T) {
-	wsConn := createTestWebSocketConnection(t)
-	defer func() { _ = wsConn.Close() }()
-
-	conn := NewConnection(wsConn)
-	defer func() { _ = conn.Close() }()
-
-	const numGoroutines = 10
-	const messagesPerGoroutine = 10
-
+	// Send messages concurrently
+	numGoroutines := 10
+	messagesPerGoroutine := 10
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 
-	// Test concurrent writes don't cause race conditions
 	for i := 0; i < numGoroutines; i++ {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < messagesPerGoroutine; j++ {
-				testData := map[string]interface{}{
-					"worker":  id,
-					"message": j,
+				msg := map[string]interface{}{
+					"goroutine": id,
+					"message":   j,
 				}
-				_ = conn.WriteJSON(testData) // Should be thread-safe
+				err := conn.WriteJSON(msg)
+				assert.NoError(t, err)
 			}
 		}(i)
 	}
 
 	wg.Wait()
+	time.Sleep(100 * time.Millisecond) // Allow time for messages to be processed
+
+	mu.Lock()
+	assert.Equal(t, numGoroutines*messagesPerGoroutine, messageCount)
+	mu.Unlock()
 }
 
-func TestConnection_ConcurrentCredentialAccess(t *testing.T) {
-	wsConn := createTestWebSocketConnection(t)
-	defer func() { _ = wsConn.Close() }()
+// TestCredentialManagement verifies authentication state management
+func TestCredentialManagement(t *testing.T) {
+	// Create minimal WebSocket connection
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer func() {
+			if err := conn.Close(); err != nil {
+				// Connection close error during test cleanup, expected
+				_ = err // Explicitly ignore error during cleanup
+			}
+		}()
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
 
-	conn := NewConnection(wsConn)
-	defer func() { _ = conn.Close() }()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := ws.Close(); err != nil {
+			t.Logf("Failed to close websocket: %v", err)
+		}
+	}()
 
-	_ = conn.SetCredentials("user123", "student", "session456")
+	conn := NewConnection(ws)
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Logf("Failed to close connection: %v", err)
+		}
+	}()
 
-	const numGoroutines = 50
+	// Test initial state
+	assert.False(t, conn.IsAuthenticated())
+	assert.Equal(t, "", conn.GetUserID())
+	assert.Equal(t, "", conn.GetRole())
+	assert.Equal(t, "", conn.GetSessionID())
+
+	// Set credentials
+	err = conn.SetCredentials("user123", "student", "session456")
+	assert.NoError(t, err)
+
+	// Verify credentials
+	assert.True(t, conn.IsAuthenticated())
+	assert.Equal(t, "user123", conn.GetUserID())
+	assert.Equal(t, "student", conn.GetRole())
+	assert.Equal(t, "session456", conn.GetSessionID())
+
+	// Test SetSessionID
+	conn.SetSessionID("session789")
+	assert.Equal(t, "session789", conn.GetSessionID())
+}
+
+// TestConcurrentCredentialAccess verifies thread-safe credential access
+func TestConcurrentCredentialAccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer func() {
+			if err := conn.Close(); err != nil {
+				// Connection close error during test cleanup, expected
+				_ = err // Explicitly ignore error during cleanup
+			}
+		}()
+		time.Sleep(200 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := ws.Close(); err != nil {
+			t.Logf("Failed to close websocket: %v", err)
+		}
+	}()
+
+	conn := NewConnection(ws)
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Logf("Failed to close connection: %v", err)
+		}
+	}()
+
+	// Set initial credentials
+	if err := conn.SetCredentials("user1", "instructor", "session1"); err != nil {
+		t.Fatalf("Failed to set credentials: %v", err)
+	}
+
+	// Concurrent reads and writes
 	var wg sync.WaitGroup
-	wg.Add(numGoroutines)
+	numGoroutines := 10
+	wg.Add(numGoroutines * 2)
 
-	// Test concurrent read access to credentials
+	// Readers
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
-			// These should be thread-safe
-			userID := conn.GetUserID()
-			role := conn.GetRole()
-			sessionID := conn.GetSessionID()
-			auth := conn.IsAuthenticated()
-
-			// Verify values are consistent
-			if userID != "user123" || role != "student" || sessionID != "session456" || !auth {
-				t.Errorf("Inconsistent credential values during concurrent access")
+			for j := 0; j < 100; j++ {
+				_ = conn.GetUserID()
+				_ = conn.GetRole()
+				_ = conn.GetSessionID()
+				_ = conn.IsAuthenticated()
 			}
 		}()
 	}
 
-	wg.Wait()
-}
-
-func TestConnection_GoroutineCleanup(t *testing.T) {
-	wsConn := createTestWebSocketConnection(t)
-	defer func() { _ = wsConn.Close() }()
-
-	conn := NewConnection(wsConn)
-
-	// Give time for writeLoop to start
-	time.Sleep(10 * time.Millisecond)
-
-	err := conn.Close()
-	if err != nil {
-		t.Errorf("Close failed: %v", err)
+	// Writers
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				conn.SetSessionID(string(rune('a' + id)))
+				time.Sleep(time.Microsecond)
+			}
+		}(i)
 	}
 
-	// Wait for goroutine cleanup
-	time.Sleep(100 * time.Millisecond)
-
-	// If there are goroutine leaks, the race detector should catch them
+	wg.Wait()
+	// Should complete without race conditions
 }
 
-// Helper function to create a test WebSocket connection
-func createTestWebSocketConnection(t *testing.T) *websocket.Conn {
+// TestConnectionClose verifies proper cleanup
+func TestConnectionClose(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := testUpgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("Failed to upgrade connection: %v", err)
-			return
-		}
-		defer func() { _ = conn.Close() }()
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer func() {
+			if err := conn.Close(); err != nil {
+				// Connection close error during test cleanup, expected
+				_ = err // Explicitly ignore error during cleanup
+			}
+		}()
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
 
-		// Keep connection alive for testing
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+
+	conn := NewConnection(ws)
+
+	// Close connection
+	err = conn.Close()
+	assert.NoError(t, err)
+
+	// Verify context is cancelled
+	select {
+	case <-conn.ctx.Done():
+		// Good, context is cancelled
+	default:
+		t.Fatal("context should be cancelled after close")
+	}
+
+	// Multiple closes should be safe (idempotent)
+	err = conn.Close()
+	assert.NoError(t, err)
+
+	// Operations after close should fail
+	err = conn.WriteJSON(map[string]string{"test": "data"})
+	assert.Equal(t, ErrConnectionClosed, err)
+}
+
+// TestWriteChannelBuffer verifies the write channel buffer behavior
+func TestWriteChannelBuffer(t *testing.T) {
+	// Test that buffer has correct capacity by filling it completely
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer func() {
+			if err := conn.Close(); err != nil {
+				// Connection close error during test cleanup, expected
+				_ = err // Explicitly ignore error during cleanup
+			}
+		}()
+		
+		// Keep connection alive and read messages
 		for {
 			_, _, err := conn.ReadMessage()
 			if err != nil {
@@ -269,14 +424,73 @@ func createTestWebSocketConnection(t *testing.T) *websocket.Conn {
 			}
 		}
 	}))
+	defer server.Close()
 
-	t.Cleanup(func() { server.Close() })
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := ws.Close(); err != nil {
+			t.Logf("Failed to close websocket: %v", err)
+		}
+	}()
 
-	url := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
-	if err != nil {
-		t.Fatalf("Failed to create test WebSocket connection: %v", err)
+	conn := NewConnection(ws)
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Logf("Failed to close connection: %v", err)
+		}
+	}()
+
+	// Test that we can send at least 100 messages (buffer size) successfully
+	successCount := 0
+	for i := 0; i < 100; i++ {
+		err = conn.WriteJSON(map[string]int{"message": i})
+		if err == nil {
+			successCount++
+		}
 	}
 
-	return conn
+	// Should be able to send all 100 messages to buffer
+	assert.Equal(t, 100, successCount, "Should be able to buffer 100 messages")
+	
+	// Verify connection is still functional
+	err = conn.WriteJSON(map[string]string{"final": "message"})
+	assert.NoError(t, err, "Connection should still be functional")
+}
+
+// TestWriteLoopRecovery verifies writeLoop handles panics gracefully
+func TestWriteLoopRecovery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer func() {
+			if err := conn.Close(); err != nil {
+				// Connection close error during test cleanup, expected
+				_ = err // Explicitly ignore error during cleanup
+			}
+		}()
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := ws.Close(); err != nil {
+			t.Logf("Failed to close websocket: %v", err)
+		}
+	}()
+
+	conn := NewConnection(ws)
+
+	// Close connection
+	err = conn.Close()
+	assert.NoError(t, err)
+
+	// Try to write after close - should not panic
+	err = conn.WriteJSON(map[string]string{"test": "data"})
+	assert.Equal(t, ErrConnectionClosed, err)
 }

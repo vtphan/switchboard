@@ -4,17 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 // Connection implements the interfaces.Connection interface
-// ARCHITECTURAL DISCOVERY: WebSocket writes must be serialized to prevent race conditions
-// Interface boundary maintained - no business logic in connection wrapper
+// Pure channel-based design - no mutex contention on writes
 type Connection struct {
 	conn          *websocket.Conn
-	writeCh       chan []byte         // FUNCTIONAL DISCOVERY: 100 buffer prevents blocking in classroom scenarios
+	writeCh       chan []byte         // 100 buffer prevents blocking in classroom scenarios
 	userID        string              // Set after authentication
 	role          string              // Set after authentication  
 	sessionID     string              // Set after authentication
@@ -22,8 +22,8 @@ type Connection struct {
 	ctx           context.Context     // For cancellation
 	cancel        context.CancelFunc  // For cleanup
 	closeOnce     sync.Once           // Ensure single close
-	mu            sync.RWMutex        // Protect auth fields
-	writeMu       sync.Mutex          // Protect writeCh access
+	mu            sync.RWMutex        // Protect auth fields only
+	writeClosed   int32               // Atomic flag for write channel status
 }
 
 // NewConnection creates a new WebSocket connection wrapper
@@ -31,7 +31,7 @@ func NewConnection(conn *websocket.Conn) *Connection {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Connection{
 		conn:          conn,
-		writeCh:       make(chan []byte, 100), // Exactly 100 message buffer
+		writeCh:       make(chan []byte, 500), // Increased buffer for high-frequency scenarios
 		ctx:           ctx,
 		cancel:        cancel,
 		authenticated: false,
@@ -43,17 +43,17 @@ func NewConnection(conn *websocket.Conn) *Connection {
 	return c
 }
 
-// ARCHITECTURAL DISCOVERY: Single writer goroutine pattern eliminates races
+// Single writer goroutine pattern with pure channel coordination
 func (c *Connection) writeLoop() {
 	defer func() {
-		// Acquire mutex before cleaning up channel
-		c.writeMu.Lock()
-		// Clean up channel on exit
+		// Set atomic flag before closing to prevent panics
+		atomic.StoreInt32(&c.writeClosed, 1)
+		
+		// Clean up channel on exit - no mutex needed
 		for len(c.writeCh) > 0 {
 			<-c.writeCh // Drain remaining messages
 		}
 		close(c.writeCh)
-		c.writeMu.Unlock()
 	}()
 	
 	for {
@@ -79,7 +79,7 @@ func (c *Connection) writeLoop() {
 	}
 }
 
-// WriteJSON implementation with timeout and error handling
+// WriteJSON implementation with pure channel-based concurrency
 func (c *Connection) WriteJSON(v interface{}) error {
 	// Check if connection is closed first
 	select {
@@ -91,35 +91,23 @@ func (c *Connection) WriteJSON(v interface{}) error {
 	// Marshal to JSON
 	data, err := json.Marshal(v)
 	if err != nil {
-		return ErrInvalidJSON // FUNCTIONAL: Error wrapping for debugging
+		return ErrInvalidJSON
 	}
 	
-	// Protect against concurrent access to writeCh
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	
-	// Double-check if connection was closed while waiting for lock
-	select {
-	case <-c.ctx.Done():
+	// Check atomic flag to avoid panic on closed channel
+	if atomic.LoadInt32(&c.writeClosed) == 1 {
 		return ErrConnectionClosed
-	default:
 	}
-	
-	// Send to write channel with timeout - now protected by mutex
-	// Use defer to handle any potential panics from closed channels
-	defer func() {
-		if r := recover(); r != nil {
-			// Channel was closed during send, which is expected during shutdown
-		}
-	}()
 	
 	select {
 	case c.writeCh <- data:
 		return nil
-	case <-time.After(5 * time.Second):
-		return ErrWriteTimeout // FUNCTIONAL: Exact timeout as specified
 	case <-c.ctx.Done():
 		return ErrConnectionClosed
+	default:
+		// Non-blocking write: if channel is full, drop message and return error
+		// This prevents broadcasts from hanging on slow/stuck connections
+		return ErrWriteTimeout
 	}
 }
 
