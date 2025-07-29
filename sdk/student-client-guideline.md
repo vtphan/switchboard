@@ -160,8 +160,9 @@ Students don't discover or choose sessions. Instead, the server handles assignme
 The Switchboard server enforces **single session architecture**:
 - Only one session can be active at any time
 - When teachers create a new session, it becomes the active session
-- All enrolled students are automatically moved to the new session
-- When sessions end, students return to lobby
+- All enrolled students are automatically moved to the new session **without disconnection**
+- When sessions end, students return to lobby **maintaining their WebSocket connection**
+- **Seamless transitions**: Students experience no connection interruptions during session changes
 
 ### Assignment Examples
 
@@ -240,7 +241,20 @@ Students receive system messages about their assignment:
   "context": "session_left", 
   "content": {
     "session_id": "550e8400-e29b-41d4-a716-446655440000",
-    "reason": "session_ended"
+    "reason": "Session ended by instructor"
+  }
+}
+```
+
+**Auto-Transitioned to New Session**:
+```json
+{
+  "type": "system",
+  "context": "session_transition",
+  "content": {
+    "session_id": "new-session-uuid",
+    "session_name": "Advanced React Concepts",
+    "reason": "Auto-transitioned from lobby to session"
   }
 }
 ```

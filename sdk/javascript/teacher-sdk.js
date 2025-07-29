@@ -31,10 +31,20 @@
     /**
      * Create session and auto-connect - one line to start teaching
      */
-    async startSession(sessionName, studentIds) {
+    async createAndConnect(sessionName, studentIds) {
       try {
         const session = await this.createSession(sessionName, studentIds);
-        await this.connect(session.id);
+        
+        // Only connect if we're not already connected
+        if (!this.connected) {
+          await this.connect();
+        } else {
+          // If already connected, the server auto-transition will handle moving us to the new session
+          // Wait a moment for the transition to complete
+          await new Promise(resolve => setTimeout(resolve, 200));
+          console.log('🎯 DEBUG: Already connected, waiting for server transition to new session');
+        }
+        
         return session;
       } catch (error) {
         this._handleError(error);
@@ -45,14 +55,39 @@
     /**
      * End current session and disconnect
      */
-    async stopSession() {
-      if (!this.currentSessionId) return;
-      
+    async endCurrentSession() {
+      // SIMPLIFIED: Single endpoint to end active session - no need to get ID first
       try {
-        await this.endSession(this.currentSessionId);
-        this.disconnect();
+        console.log('🚩 DEBUG: Ending active session via DELETE /api/sessions/active');
+        
+        const response = await fetch(`${this.serverUrl}/api/sessions/active`, {
+          method: 'DELETE'
+        });
+        
+        // IDEMPOTENCY: Both 200 (success) and 404 (no session) are valid responses
+        if (!response.ok && response.status !== 404) {
+          const errorText = await response.text();
+          console.error('Session end failed:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText
+          });
+          throw new Error(`Failed to end session: ${response.statusText}`);
+        }
+        
+        const responseData = await response.json();
+        console.log(`✅ DEBUG: ${responseData.message || 'Session ended successfully'}`);
+        
+        // Always ensure client state is set to lobby after operation
+        this.currentSessionId = 'lobby';
+        
+        // RACE CONDITION FIX: Add small delay to ensure session cleanup completes
+        // This prevents conflicts when immediately creating a new session
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
       } catch (error) {
         this._handleError(error);
+        throw error;
       }
     }
 
@@ -147,6 +182,12 @@
       });
 
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Session creation failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
         throw new Error(`Failed to create session: ${response.statusText}`);
       }
 
@@ -162,13 +203,16 @@
       return await response.json();
     }
 
-    async listActiveSessions() {
-      const response = await fetch(`${this.serverUrl}/api/sessions`);
+    async getActiveSession() {
+      const response = await fetch(`${this.serverUrl}/api/sessions/active`);
       if (!response.ok) {
-        throw new Error(`Failed to list sessions: ${response.statusText}`);
+        if (response.status === 404) {
+          return null; // No active session
+        }
+        throw new Error(`Failed to get active session: ${response.statusText}`);
       }
       const data = await response.json();
-      return data.sessions || [];
+      return data.session;
     }
 
     async endSession(sessionId) {
@@ -176,15 +220,22 @@
         method: 'DELETE'
       });
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Session end failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
         throw new Error(`Failed to end session: ${response.statusText}`);
       }
+      console.log('✅ DEBUG: Session ended successfully');
     }
 
     // ==================== CONNECTION MANAGEMENT ====================
 
-    async connect(sessionId = 'lobby') {
-      this.currentSessionId = sessionId;
-      const wsUrl = `ws://localhost:8080/ws?user_id=${this.instructorId}&role=instructor${sessionId !== 'lobby' ? `&session_id=${sessionId}` : ''}`;
+    async connect() {
+      // Auto-assignment: don't specify session, let server decide
+      const wsUrl = `ws://localhost:8080/ws?user_id=${this.instructorId}&role=instructor`;
       
       return new Promise((resolve, reject) => {
         this.ws = new WebSocket(wsUrl);
@@ -192,6 +243,8 @@
         this.ws.onopen = () => {
           this.connected = true;
           this.reconnectAttempts = 0;
+          // Server will tell us which session we're in via system message
+          this.currentSessionId = 'lobby'; // Default until server confirms
           this._handleConnection(true);
           resolve();
         };
@@ -225,6 +278,20 @@
       }
       this.connected = false;
       this.currentSessionId = null;
+    }
+
+    // ==================== STATE CHECKING ====================
+
+    isInLobby() {
+      return this.connected && (this.currentSessionId === 'lobby' || this.currentSessionId === null);
+    }
+
+    isInSession() {
+      return this.connected && this.currentSessionId && this.currentSessionId !== 'lobby';
+    }
+
+    getSessionId() {
+      return this.isInSession() ? this.currentSessionId : null;
     }
 
     // ==================== INTERNAL METHODS ====================
@@ -307,7 +374,37 @@
         }
       }
 
-      if (event === 'session_started' || event === 'session_left') {
+      if (event === 'session_started') {
+        // Update current session when we join/create a session
+        this.currentSessionId = message.content?.session_id;
+        console.log(`🎆 DEBUG: Server assigned us to session: ${this.currentSessionId}`);
+        if (this.onSessionEvent) {
+          this.onSessionEvent({
+            event: event,
+            sessionId: message.content?.session_id,
+            sessionName: message.content?.session_name,
+            data: message.content
+          });
+        }
+      } else if (event === 'session_transition') {
+        // Update current session when we're transitioned to a new session
+        this.currentSessionId = message.content?.session_id;
+        console.log(`🔄 DEBUG: Server transitioned us to session: ${this.currentSessionId}`);
+        if (this.onSessionEvent) {
+          this.onSessionEvent({
+            event: 'session_started', // Treat as session_started for UI purposes
+            sessionId: message.content?.session_id,
+            sessionName: message.content?.session_name,
+            data: message.content
+          });
+        }
+      } else if (event === 'lobby_assigned') {
+        // Update to lobby when server assigns us to lobby
+        this.currentSessionId = 'lobby';
+        console.log('📝 DEBUG: Server assigned us to lobby');
+      } else if (event === 'session_left') {
+        // Return to lobby when session ends
+        this.currentSessionId = 'lobby';
         if (this.onSessionEvent) {
           this.onSessionEvent({
             event: event,
@@ -348,9 +445,9 @@
       const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
 
       setTimeout(() => {
-        if (this.currentSessionId && !this.connected) {
+        if (!this.connected) {
           console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-          this.connect(this.currentSessionId).catch(console.error);
+          this.connect().catch(console.error);
         }
       }, delay);
     }

@@ -297,6 +297,22 @@
         }
       }
 
+      // Handle session transitions (when moved from lobby to new session)
+      if (event === 'session_transition' && message.content?.session_id) {
+        console.log(`Transitioned to session: ${message.content.session_name}`);
+        this.currentSessionId = message.content.session_id;
+        
+        if (this.onSessionEvent) {
+          this.onSessionEvent({
+            event: 'session_assigned', // Treat as session assignment for UI purposes
+            sessionId: message.content.session_id,
+            sessionName: message.content.session_name,
+            reason: message.content.reason,
+            data: message.content
+          });
+        }
+      }
+
       // Handle being moved back to lobby when session ends
       if (event === 'session_left') {
         console.log(`Session ended, moved to lobby`);

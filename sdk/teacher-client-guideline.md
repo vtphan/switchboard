@@ -43,20 +43,55 @@ This lobby system eliminates the need for polling and provides instant notificat
 Teachers can connect to the lobby without specifying a session:
 
 ```javascript
-// Connect to lobby for presence awareness
+// Connect to lobby for presence awareness (auto-assignment)
 const wsUrl = 'ws://localhost:8080/ws?user_id=teacher_001&role=instructor';
 const ws = new WebSocket(wsUrl);
 
-// Or connect with explicit lobby parameter
-const wsUrl = 'ws://localhost:8080/ws?user_id=teacher_001&role=instructor&session_id=lobby';
+// Server automatically assigns to active session (if exists) or lobby
+```
+
+#### Seamless Session Management
+The system now provides **seamless session transitions** that maintain WebSocket connections:
+
+- **Creating Sessions from Lobby**: When connected to lobby, teachers can create new sessions without disconnection
+- **Smart Connection Logic**: SDK automatically handles existing connections to prevent disconnection issues
+- **Preserved State**: WebSocket connections remain active throughout session lifecycle
+- **Instant Transitions**: Users move between lobby and session states without reconnection delays
+
+```javascript
+// Example: Creating session while in lobby
+const teacher = new SwitchboardTeacher('teacher_001');
+await teacher.connect(); // Connects to lobby initially
+
+// This preserves the existing connection and transitions smoothly
+const session = await teacher.createAndConnect('Math Class', ['student1', 'student2']);
 ```
 
 #### Session Connection
-When connecting to a specific session, teachers maintain lobby awareness:
+Teachers are automatically assigned to sessions based on server state:
 
 ```javascript
-// Connect to specific session (also receives lobby events)
+// Auto-assignment connection (recommended)
+const wsUrl = 'ws://localhost:8080/ws?user_id=teacher_001&role=instructor';
+// Server assigns to active session if exists, otherwise to lobby
+
+// Specific session connection (when needed)
 const wsUrl = 'ws://localhost:8080/ws?user_id=teacher_001&role=instructor&session_id=550e8400-e29b-41d4-a716-446655440000';
+```
+
+#### Session Lifecycle Events
+The SDK handles session transitions automatically and provides events for UI updates:
+
+```javascript
+teacher.onSessionEvent = (data) => {
+  if (data.event === 'session_started') {
+    console.log(`Joined session: ${data.sessionName}`);
+    // Update UI to show session mode
+  } else if (data.event === 'session_left') {
+    console.log('Returned to lobby');
+    // Update UI to show lobby mode
+  }
+};
 ```
 
 ### Lobby System Events
