@@ -84,7 +84,7 @@
                         </div>
                         <div class="button-group">
                             <button id="createSessionBtn" class="primary-btn">Create Session</button>
-                            <button id="listSessionsBtn" class="secondary-btn">List Sessions</button>
+                            <button id="connectBtn" class="secondary-btn">Connect to Active Session</button>
                             <button id="endSessionBtn" class="danger-btn" disabled>End Session</button>
                         </div>
                         <div class="current-session" id="currentSession" style="display: none;">
@@ -92,13 +92,6 @@
                                 <span><strong>Session ID:</strong> <span id="currentSessionId">-</span></span>
                                 <span><strong>Experts Connected:</strong> <span id="connectedExperts">0</span>/<span id="totalExperts">6</span></span>
                             </div>
-                        </div>
-                        <div class="session-list" id="sessionList" style="display: none;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                                <h3>Active Sessions</h3>
-                                <button class="secondary-btn" onclick="document.getElementById('sessionList').style.display='none'">Hide</button>
-                            </div>
-                            <div id="sessionsContainer"></div>
                         </div>
                     </div>
                 </div>

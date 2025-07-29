@@ -106,15 +106,27 @@ class SwitchboardTeacher(SwitchboardClient):
         except aiohttp.ClientError as e:
             raise SwitchboardError(f"Network error ending session: {e}")
 
-    async def list_active_sessions(self) -> List[Session]:
+    async def get_active_session(self) -> Optional[Session]:
         """
-        List all active sessions (teachers can see all sessions)
+        Get the currently active session (only one can be active at a time)
         
         Returns:
-            List of all active Session objects
+            Active Session object or None if no active session
         """
-        all_sessions = await self.discover_sessions()
-        return [session for session in all_sessions if session.status == "active"]
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.server_url}/api/sessions/active") as response:
+                    if response.status == 404:
+                        return None  # No active session
+                    elif response.status == 200:
+                        data = await response.json()
+                        return Session.from_dict(data["session"])
+                    else:
+                        error_text = await response.text()
+                        raise SwitchboardError(f"Failed to get active session: HTTP {response.status} - {error_text}")
+                        
+        except aiohttp.ClientError as e:
+            raise SwitchboardError(f"Network error getting active session: {e}")
 
     # Teacher Message Sending Methods
     
@@ -308,7 +320,7 @@ class SwitchboardTeacher(SwitchboardClient):
                                session_name: str, 
                                student_ids: List[str]) -> Session:
         """
-        Create a session and immediately connect to it
+        Create a session and immediately connect (auto-assignment)
         
         Args:
             session_name: Name for the new session
@@ -321,21 +333,50 @@ class SwitchboardTeacher(SwitchboardClient):
             SwitchboardError: If creation or connection fails
         """
         session = await self.create_session(session_name, student_ids)
-        await self.connect(session.id)
+        await self.connect()  # Auto-assignment - server will place us in the session we just created
         return session
 
     async def end_current_session(self) -> None:
         """
-        End the currently connected session
+        End the currently connected session (return to lobby, stay connected)
         
         Raises:
             SwitchboardError: If no session connected or ending fails
         """
-        if not self.current_session_id:
-            raise SwitchboardError("No session currently connected")
+        if not self.current_session_id or self.current_session_id == "lobby":
+            raise SwitchboardError("No active session to end")
             
         await self.end_session(self.current_session_id)
-        await self.disconnect()
+        # Stay connected but return to lobby - server will send session_left system message
+
+    # State Checking Methods
+    
+    def is_in_lobby(self) -> bool:
+        """
+        Check if teacher is currently in lobby
+        
+        Returns:
+            True if in lobby, False otherwise
+        """
+        return self.connected and (self.current_session_id == "lobby" or self.current_session_id is None)
+    
+    def is_in_session(self) -> bool:
+        """
+        Check if teacher is currently in an active session
+        
+        Returns:
+            True if in active session, False otherwise
+        """
+        return self.connected and self.current_session_id and self.current_session_id != "lobby"
+    
+    def get_session_id(self) -> Optional[str]:
+        """
+        Get current session ID if in a session
+        
+        Returns:
+            Session ID if in session, None if in lobby
+        """
+        return self.current_session_id if self.is_in_session() else None
 
     # Event Handler Convenience Methods
     

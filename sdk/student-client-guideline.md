@@ -29,8 +29,8 @@ This guide provides comprehensive instructions for developing student client app
 
 ### Student Role Permissions
 
-Students have **restricted session access** and can:
-- Connect only to sessions where they are explicitly listed in `student_ids`
+Students have **automatic session assignment** and can:
+- Connect to Switchboard without specifying sessions (server auto-assigns)
 - Send 3 specific message types: `instructor_inbox`, `request_response`, `analytics`
 - Receive messages from instructors: `inbox_response`, `request`, `instructor_broadcast`
 - View filtered message history (only messages relevant to them)
@@ -39,8 +39,15 @@ Students have **restricted session access** and can:
 
 - **Cannot create or manage sessions** - sessions are instructor-managed
 - **Cannot send instructor-only message types** (`inbox_response`, `request`, `instructor_broadcast`)
-- **Cannot access sessions they're not enrolled in**
+- **Cannot manually choose sessions** - server automatically assigns based on enrollment
 - **Cannot see all session messages** - history is filtered based on relevance
+
+### Auto-Assignment Architecture
+
+When students connect, the server automatically:
+1. **Checks active session enrollment** - if student is in `student_ids` of active session → assigns to session
+2. **Places in lobby otherwise** - if no active session or not enrolled → assigns to lobby  
+3. **Handles transitions** - automatically moves students between lobby and sessions
 
 ## Student Role Overview
 
@@ -49,7 +56,7 @@ Students have **restricted session access** and can:
 Students connect with:
 - **user_id**: Their unique student identifier
 - **role**: Always `"student"`
-- **session_id**: The session they're enrolled in
+- **No session_id**: Server automatically determines assignment
 
 ### Message Visibility Rules
 
@@ -135,102 +142,107 @@ async def handle_presence(message):
 3. **Participate in Session**: Normal message exchange
 4. **Return to Lobby**: Stay connected when session ends
 
-## Session Discovery
+## Server Auto-Assignment
 
-Since students cannot create sessions, they need to discover available sessions they're enrolled in.
+Students don't discover or choose sessions. Instead, the server handles assignment automatically based on enrollment and session state.
 
-### Finding Your Sessions
+### How Auto-Assignment Works
 
-**Endpoint**: `GET /api/sessions`
+1. **Student connects without session_id**: `ws://localhost:8080/ws?user_id=student_001&role=student`
+2. **Server checks active session**: If there's currently an active session
+3. **Enrollment verification**: Server checks if student is in `student_ids` array
+4. **Assignment decision**:
+   - **Enrolled in active session** → Assigns student to that session
+   - **Not enrolled or no active session** → Assigns student to lobby
 
-```http
-GET /api/sessions
+### Single Session Enforcement
+
+The Switchboard server enforces **single session architecture**:
+- Only one session can be active at any time
+- When teachers create a new session, it becomes the active session
+- All enrolled students are automatically moved to the new session
+- When sessions end, students return to lobby
+
+### Assignment Examples
+
+**Scenario 1: Student enrolled in active session**
+```
+Student connects → Server finds active session "React Workshop" → 
+Student in student_ids → Assigned to session
 ```
 
-**Response**:
-```json
-{
-  "sessions": [
-    {
-      "id": "550e8400-e29b-41d4-a716-446655440000",
-      "name": "Advanced React Workshop",
-      "created_by": "teacher_001",
-      "student_ids": ["student_001", "student_002", "student_003"],
-      "start_time": "2024-01-15T10:00:00Z",
-      "end_time": null,
-      "status": "active",
-      "connection_count": 3
-    }
-  ]
-}
+**Scenario 2: Student not enrolled**
+```  
+Student connects → Server finds active session "React Workshop" →
+Student NOT in student_ids → Assigned to lobby
 ```
 
-### Session Enrollment Check
-
-Students should filter sessions where their `user_id` appears in the `student_ids` array:
-
-```javascript
-const mySessionsFilter = (sessions, myUserId) => {
-  return sessions.filter(session => 
-    session.student_ids.includes(myUserId) && 
-    session.status === 'active'
-  );
-};
+**Scenario 3: No active session**
 ```
-
-### Getting Session Details
-
-**Endpoint**: `GET /api/sessions/{session_id}`
-
-```http
-GET /api/sessions/550e8400-e29b-41d4-a716-446655440000
+Student connects → No active sessions → Assigned to lobby
 ```
-
-Use this to verify enrollment and get current session information before connecting.
 
 ## WebSocket Connection
 
 ### Connection URL Format
 
 ```
-ws://localhost:8080/ws?user_id={student_id}&role=student&session_id={session_id}
+ws://localhost:8080/ws?user_id={student_id}&role=student
 ```
 
-### Authentication Flow
+**Note**: No `session_id` parameter - server handles assignment automatically.
 
-1. **Verify Session Enrollment** (recommended pre-check)
+### Connection Flow
+
+1. **Establish WebSocket Connection**
    ```javascript
-   const session = await fetch(`/api/sessions/${sessionId}`).then(r => r.json());
-   if (!session.session.student_ids.includes(myUserId)) {
-     throw new Error('Not enrolled in this session');
-   }
+   const ws = new WebSocket('ws://localhost:8080/ws?user_id=student_001&role=student');
    ```
 
-2. **Establish WebSocket Connection**
-   ```javascript
-   const ws = new WebSocket(`ws://localhost:8080/ws?user_id=student_001&role=student&session_id=${sessionId}`);
-   ```
+2. **Server Auto-Assignment**
+   - Server determines session assignment based on enrollment
+   - Student is placed in active session (if enrolled) or lobby
 
 3. **Connection Events**
-   - `open`: Connection established, filtered history replay begins
-   - `message`: Incoming messages from instructors or system
-   - `error`: Connection errors (often due to enrollment issues)
+   - `open`: Connection established, auto-assignment complete
+   - `message`: Incoming messages from instructors, system notifications
+   - `error`: Connection errors (network issues, server problems)
    - `close`: Connection terminated
 
-4. **Filtered History Replay**
-   - Server sends only messages relevant to this student
+4. **History Replay** 
+   - Server sends filtered message history for assigned location (session or lobby)
    - Includes: instructor broadcasts, direct messages to/from this student
-   - Excludes: other students' private conversations with instructors
+   - Excludes: other students' private conversations with instructors  
    - Ends with `history_complete` system message
 
-### Authentication Errors
+### System Assignment Notifications
 
-Common enrollment-related errors:
-```http
-HTTP/1.1 403 Forbidden
-Content-Type: text/plain
+Students receive system messages about their assignment:
 
-Student not enrolled in session
+**Assigned to Session**:
+```json
+{
+  "type": "system", 
+  "context": "session_started",
+  "content": {
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "session_name": "React Workshop",
+    "instructor_id": "teacher_001",
+    "student_ids": ["student_001", "student_002"]
+  }
+}
+```
+
+**Moved to Lobby**:
+```json
+{
+  "type": "system",
+  "context": "session_left", 
+  "content": {
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "reason": "session_ended"
+  }
+}
 ```
 
 ### System Messages
@@ -445,14 +457,10 @@ class StudentSwitchboardClient {
     this.messageHandlers = new Map();
   }
 
-  // Session Discovery
-  async findAvailableSessions() { /* ... */ }
-  async getSessionInfo(sessionId) { /* ... */ }
-  async checkEnrollment(sessionId) { /* ... */ }
-
-  // WebSocket Connection
-  async connectToSession(sessionId) { /* ... */ }
-  disconnect() { /* ... */ }
+  // Connection (Auto-assignment)
+  async connect() { /* Connect without session_id - server assigns */ }
+  disconnect() { /* Disconnect from current assignment */ }
+  getCurrentLocation() { /* Check if in session or lobby */ }
 
   // Message Sending
   async askQuestion(context, content) { /* ... */ }
@@ -614,45 +622,14 @@ class SimpleStudentClient {
     this.currentSessionId = null;
   }
 
-  async findAvailableSessions() {
-    const response = await fetch(`${this.serverUrl}/api/sessions`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch sessions: ${response.statusText}`);
-    }
-    
-    const data = await response.json();
-    
-    // Filter sessions where this student is enrolled
-    return data.sessions.filter(session => 
-      session.student_ids.includes(this.studentId) && 
-      session.status === 'active'
-    );
-  }
-
-  async checkEnrollment(sessionId) {
-    const response = await fetch(`${this.serverUrl}/api/sessions/${sessionId}`);
-    if (!response.ok) {
-      return false;
-    }
-    
-    const data = await response.json();
-    return data.session.student_ids.includes(this.studentId);
-  }
-
-  async connectToSession(sessionId) {
-    // Verify enrollment first
-    const isEnrolled = await this.checkEnrollment(sessionId);
-    if (!isEnrolled) {
-      throw new Error('Not enrolled in this session');
-    }
-
-    const wsUrl = `ws://localhost:8080/ws?user_id=${this.studentId}&role=student&session_id=${sessionId}`;
+  async connect() {
+    // Connect without session_id - server will auto-assign
+    const wsUrl = `ws://localhost:8080/ws?user_id=${this.studentId}&role=student`;
     
     this.ws = new WebSocket(wsUrl);
-    this.currentSessionId = sessionId;
 
     this.ws.onopen = () => {
-      console.log('Connected to session:', sessionId);
+      console.log('Connected! Server will auto-assign to session or lobby.');
     };
 
     this.ws.onmessage = (event) => {
@@ -665,7 +642,7 @@ class SimpleStudentClient {
     };
 
     this.ws.onclose = (event) => {
-      console.log('Disconnected from session');
+      console.log('Disconnected');
       if (event.code !== 1000) {
         console.warn('Unexpected disconnection:', event.code);
       }
@@ -675,6 +652,14 @@ class SimpleStudentClient {
       this.ws.onopen = () => resolve();
       this.ws.onerror = (error) => reject(error);
     });
+  }
+
+  getCurrentLocation() {
+    return {
+      connected: this.ws && this.ws.readyState === WebSocket.OPEN,
+      currentSession: this.currentSessionId,
+      location: this.currentSessionId === 'lobby' ? 'lobby' : `session:${this.currentSessionId}`
+    };
   }
 
   handleMessage(message) {
@@ -771,9 +756,22 @@ class SimpleStudentClient {
   }
 
   handleSystemMessage(message) {
-    const event = message.content.event;
+    const event = message.context || message.content?.event;
     
     switch (event) {
+      case 'session_started':
+        // Check if we're assigned to this session
+        if (message.content?.student_ids?.includes(this.studentId)) {
+          this.currentSessionId = message.content.session_id;
+          console.log(`Assigned to session: ${message.content.session_name}`);
+          this.onSessionAssigned?.(message.content);
+        }
+        break;
+      case 'session_left':
+        console.log('Moved back to lobby - session ended');
+        this.currentSessionId = 'lobby';
+        this.onMovedToLobby?.(message.content);
+        break;
       case 'history_complete':
         console.log('Message history loaded');
         this.onHistoryLoaded();
@@ -810,23 +808,24 @@ class SimpleStudentClient {
   }
 }
 
-// Usage Example
+// Usage Example  
 async function runStudentSession() {
   const client = new SimpleStudentClient('http://localhost:8080', 'student_001');
 
   try {
-    // Find available sessions
-    const sessions = await client.findAvailableSessions();
-    console.log('Available sessions:', sessions);
+    // Set up event handlers for auto-assignment
+    client.onSessionAssigned = (sessionData) => {
+      console.log(`🎓 Automatically assigned to: ${sessionData.session_name}`);
+      // Update UI to show session mode
+    };
 
-    if (sessions.length === 0) {
-      console.log('No active sessions found');
-      return;
-    }
+    client.onMovedToLobby = (reason) => {
+      console.log('📚 Back in lobby - waiting for next session');
+      // Update UI to show lobby mode
+    };
 
-    // Connect to the first available session
-    const session = sessions[0];
-    await client.connectToSession(session.id);
+    // Connect - server will auto-assign to session or lobby
+    await client.connect();
 
     // Send initial analytics
     client.sendAnalytics('engagement', {
@@ -881,46 +880,26 @@ class StudentSwitchboardClient:
         self.current_session_id: Optional[str] = None
         self.message_handlers = {}
 
-    async def find_available_sessions(self) -> List[Dict[str, Any]]:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.server_url}/api/sessions") as response:
-                if response.status != 200:
-                    raise Exception(f"Failed to fetch sessions: {response.status}")
-                
-                data = await response.json()
-                
-                # Filter sessions where this student is enrolled
-                available_sessions = [
-                    s for s in data["sessions"] 
-                    if self.student_id in s["student_ids"] and s["status"] == "active"
-                ]
-                
-                return available_sessions
-
-    async def check_enrollment(self, session_id: str) -> bool:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.server_url}/api/sessions/{session_id}") as response:
-                if response.status != 200:
-                    return False
-                
-                data = await response.json()
-                return self.student_id in data["session"]["student_ids"]
-
-    async def connect_to_session(self, session_id: str):
-        # Verify enrollment first
-        is_enrolled = await self.check_enrollment(session_id)
-        if not is_enrolled:
-            raise Exception("Not enrolled in this session")
-
-        ws_url = f"ws://localhost:8080/ws?user_id={self.student_id}&role=student&session_id={session_id}"
+    async def connect(self):
+        """Connect to Switchboard - server will auto-assign to session or lobby"""
+        # Connect without session_id - let server auto-assign
+        ws_url = f"ws://localhost:8080/ws?user_id={self.student_id}&role=student"
         
         self.ws = await websockets.connect(ws_url)
-        self.current_session_id = session_id
+        self.current_session_id = None  # Will be set by server assignment
         
-        print(f"Connected to session: {session_id}")
+        print("Connected! Server will auto-assign to session or lobby.")
         
         # Start message handling task
         asyncio.create_task(self.handle_messages())
+
+    def get_current_location(self) -> Dict[str, Any]:
+        """Get current session/lobby status"""
+        return {
+            "connected": self.ws is not None,
+            "current_session": self.current_session_id,
+            "location": "lobby" if self.current_session_id == "lobby" else f"session:{self.current_session_id}"
+        }
 
     async def handle_messages(self):
         if not self.ws:
@@ -969,9 +948,29 @@ class StudentSwitchboardClient:
             await self.message_handlers['instructor_broadcast'](message)
 
     async def handle_system_message(self, message: Dict[str, Any]):
-        event = message['content']['event']
+        event = message.get('context') or message.get('content', {}).get('event')
         
-        if event == 'history_complete':
+        if event == 'session_started':
+            # Check if we're assigned to this session
+            content = message.get('content', {})
+            if self.student_id in content.get('student_ids', []):
+                self.current_session_id = content.get('session_id')
+                session_name = content.get('session_name', 'Unknown')
+                print(f"🎓 Assigned to session: {session_name}")
+                
+                # Call custom handler if set
+                if 'session_assigned' in self.message_handlers:
+                    await self.message_handlers['session_assigned'](content)
+                    
+        elif event == 'session_left':
+            print("📚 Moved back to lobby - session ended")
+            self.current_session_id = 'lobby'
+            
+            # Call custom handler if set  
+            if 'moved_to_lobby' in self.message_handlers:
+                await self.message_handlers['moved_to_lobby'](message.get('content', {}))
+                
+        elif event == 'history_complete':
             print("Message history loaded")
         elif event == 'message_error':
             print(f"Message error: {message['content']['error']}")
@@ -1007,26 +1006,11 @@ class StudentSwitchboardClient:
             self.ws = None
         self.current_session_id = None
 
-# Usage example with interactive features
+# Usage example with auto-assignment
 async def interactive_student_session():
     client = StudentSwitchboardClient("http://localhost:8080", "student_001")
     
     try:
-        # Find available sessions
-        sessions = await client.find_available_sessions()
-        
-        if not sessions:
-            print("No active sessions found")
-            return
-        
-        print("Available sessions:")
-        for i, session in enumerate(sessions):
-            print(f"{i + 1}. {session['name']} (ID: {session['id']})")
-        
-        # Let user choose session (simplified - in real app, use GUI)
-        session_choice = 0  # Use first session for demo
-        chosen_session = sessions[session_choice]
-        
         # Set up custom message handlers
         async def handle_request(message):
             print(f"\n🔔 REQUEST from {message['from_user']}:")
@@ -1056,11 +1040,27 @@ async def interactive_student_session():
                 "attention_level": "high"
             })
 
+        async def handle_session_assigned(session_data):
+            session_name = session_data.get('session_name', 'Unknown')
+            print(f"\n🎓 AUTO-ASSIGNED to session: {session_name}")
+            
+            # Send session join analytics
+            await client.send_analytics("engagement", {
+                "event": "session_joined",
+                "timestamp": datetime.now().isoformat(),
+                "session_name": session_name
+            })
+
+        async def handle_moved_to_lobby(reason_data):
+            print(f"\n📚 MOVED TO LOBBY - {reason_data.get('reason', 'session ended')}")
+
         client.set_message_handler('instructor_request', handle_request)
-        client.set_message_handler('instructor_broadcast', handle_broadcast)
+        client.set_message_handler('instructor_broadcast', handle_broadcast)  
+        client.set_message_handler('session_assigned', handle_session_assigned)
+        client.set_message_handler('moved_to_lobby', handle_moved_to_lobby)
         
-        # Connect to session
-        await client.connect_to_session(chosen_session['id'])
+        # Connect - server will auto-assign to session or lobby
+        await client.connect()
         
         # Send initial analytics
         await client.send_analytics("engagement", {

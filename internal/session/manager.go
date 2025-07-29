@@ -91,11 +91,15 @@ func (m *Manager) CreateSession(ctx context.Context, name string, createdBy stri
 	defer m.mu.Unlock()
 	
 	// Check for existing active session
-	for _, session := range m.activeSessions {
+	log.Printf("🔍 DEBUG: CreateSession - checking for active sessions, cache size: %d", len(m.activeSessions))
+	for sessionID, session := range m.activeSessions {
+		log.Printf("📄 DEBUG: CreateSession - found session in cache: %s (status: %s)", sessionID, session.Status)
 		if session.Status == "active" {
+			log.Printf("❌ DEBUG: CreateSession - found active session: %s, cannot create new session", sessionID)
 			return nil, ErrActiveSessionExists
 		}
 	}
+	log.Printf("✅ DEBUG: CreateSession - no active sessions found, proceeding with creation")
 	
 	// Validate input parameters
 	if name == "" || len(name) > 200 {
@@ -134,6 +138,7 @@ func (m *Manager) CreateSession(ctx context.Context, name string, createdBy stri
 	// Add to in-memory cache optimistically to prevent race conditions
 	// This ensures concurrent CreateSession calls see the session immediately
 	m.activeSessions[session.ID] = session
+	log.Printf("📝 DEBUG: CreateSession - added session to cache: %s", session.ID)
 	
 	// Persist to database with timeout
 	dbCtx, cancel := context.WithTimeout(ctx, sessionWriteTimeout)
@@ -144,7 +149,7 @@ func (m *Manager) CreateSession(ctx context.Context, name string, createdBy stri
 		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
 	
-	log.Printf("Created session: id=%s name=%s students=%d", session.ID, session.Name, len(session.StudentIDs))
+	log.Printf("🎆 DEBUG: Session created successfully - id=%s name=%s instructor=%s students=%d", session.ID, session.Name, session.CreatedBy, len(session.StudentIDs))
 	return session, nil
 }
 
@@ -174,17 +179,23 @@ func (m *Manager) EndSession(ctx context.Context, sessionID string) error {
 	
 	// Get session from cache
 	session, exists := m.activeSessions[sessionID]
+	log.Printf("🔍 DEBUG: EndSession - sessionID: %s, exists in cache: %t", sessionID, exists)
 	
 	if !exists {
 		// Check if session exists in database but not active
 		dbSession, err := m.dbManager.GetSession(ctx, sessionID)
 		if err != nil {
+			log.Printf("❌ DEBUG: EndSession - session not found in database: %s", sessionID)
 			return ErrSessionNotFound
 		}
 		if dbSession.Status == "ended" {
-			return ErrSessionAlreadyEnded
+			// IDEMPOTENCY FIX: Return success if session is already ended
+			// This makes endSession idempotent - calling it multiple times has same effect
+			log.Printf("✅ DEBUG: EndSession - session already ended, idempotent success: %s", sessionID)
+			return nil
 		}
 		session = dbSession
+		log.Printf("📀 DEBUG: EndSession - got session from database: %s (status: %s)", sessionID, session.Status)
 	}
 	
 	// Update session status
@@ -196,13 +207,20 @@ func (m *Manager) EndSession(ctx context.Context, sessionID string) error {
 	dbCtx, cancel := context.WithTimeout(ctx, sessionWriteTimeout)
 	defer cancel()
 	if err := m.dbManager.UpdateSession(dbCtx, session); err != nil {
+		log.Printf("❌ DEBUG: EndSession - failed to update session in database: %s, error: %v", sessionID, err)
 		return fmt.Errorf("failed to end session: %w", err)
 	}
+	log.Printf("✅ DEBUG: EndSession - session updated in database: %s", sessionID)
 	
-	// Remove from active sessions cache (no lock needed - single goroutine)
-	delete(m.activeSessions, sessionID)
+	// Remove from active sessions cache only if it was originally in cache
+	if exists {
+		delete(m.activeSessions, sessionID)
+		log.Printf("🗑️ DEBUG: EndSession - removed session from cache: %s", sessionID)
+	} else {
+		log.Printf("📄 DEBUG: EndSession - session was not in cache, no removal needed: %s", sessionID)
+	}
 	
-	log.Printf("Ended session: id=%s name=%s", session.ID, session.Name)
+	log.Printf("🚩 DEBUG: Session ended successfully - id=%s name=%s instructor=%s", session.ID, session.Name, session.CreatedBy)
 	return nil
 }
 

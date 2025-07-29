@@ -43,46 +43,74 @@ class SwitchboardStudent(SwitchboardClient):
             reconnect_delay=reconnect_delay
         )
 
-    # Session Discovery (Student-specific)
+    # Connection (Student-specific)
     
-    async def find_available_sessions(self) -> List[Session]:
+    async def connect(self) -> Dict[str, Any]:
         """
-        Find sessions where this student is enrolled
+        Connect to Switchboard - server will auto-assign to session or lobby
+        
+        Students don't choose sessions. The server automatically:
+        - Assigns to active session if student is enrolled
+        - Places in lobby if no active session or not enrolled
         
         Returns:
-            List of sessions this student can join
-        """
-        all_sessions = await self.discover_sessions()
-        
-        # Filter to sessions where student is enrolled and active
-        available_sessions = [
-            session for session in all_sessions
-            if self.user_id in session.student_ids and session.status == "active"
-        ]
-        
-        return available_sessions
-
-    async def connect_to_available_session(self) -> Optional[Session]:
-        """
-        Automatically connect to first available session
-        If no sessions available, connects to lobby and waits for session_started events
-        
-        Returns:
-            Session object if connection successful, None if no sessions available
+            Connection status dictionary
             
         Raises:
             SwitchboardError: If connection fails
         """
-        available_sessions = await self.find_available_sessions()
+        # Use parent connect method with auto-assignment (no session_id)
+        await super().connect()
         
-        if not available_sessions:
-            # No active sessions - connect to lobby and wait for session_started events
-            await self.connect_to_lobby()
-            return None
-            
-        session = available_sessions[0]
-        await self.connect(session.id)
-        return session
+        return {
+            "connected": self.connected,
+            "user_id": self.user_id,
+            "status": "Server auto-assigned to session or lobby",
+            "location": "lobby" if self.current_session_id == "lobby" else f"session:{self.current_session_id}"
+        }
+
+    async def get_current_location(self) -> Dict[str, Any]:
+        """
+        Get current session/lobby status
+        
+        Returns:
+            Dictionary with current location info
+        """
+        return {
+            "connected": self.connected,
+            "session_id": self.current_session_id,
+            "location": "lobby" if self.current_session_id == "lobby" else f"session:{self.current_session_id}",
+            "user_id": self.user_id
+        }
+    
+    # State checking methods
+    
+    def is_in_lobby(self) -> bool:
+        """
+        Check if student is currently in lobby
+        
+        Returns:
+            True if in lobby, False otherwise
+        """
+        return self.connected and (self.current_session_id == "lobby" or self.current_session_id is None)
+    
+    def is_in_session(self) -> bool:
+        """
+        Check if student is currently in an active session
+        
+        Returns:
+            True if in active session, False otherwise
+        """
+        return self.connected and self.current_session_id and self.current_session_id != "lobby"
+    
+    def get_session_id(self) -> Optional[str]:
+        """
+        Get current session ID if in a session
+        
+        Returns:
+            Session ID if in session, None if in lobby
+        """
+        return self.current_session_id if self.is_in_session() else None
 
     # Student Message Sending Methods
     
@@ -265,30 +293,38 @@ class SwitchboardStudent(SwitchboardClient):
         """Register handler for system messages"""
         self.on_message(MessageType.SYSTEM, handler)
     
-    # LOBBY SYSTEM: Override base class methods for student-specific behavior
+    # Session Event Handlers
     
-    async def _should_join_session(self, session_data: dict) -> bool:
+    def on_session_assigned(self, handler):
         """
-        Students should auto-join sessions where they are enrolled
+        Register handler for when server assigns student to a session
         """
-        student_ids = session_data.get("student_ids", [])
-        should_join = self.user_id in student_ids
-        
-        if should_join:
-            session_id = session_data.get("session_id", "unknown")
-            logger.info(f"🎓 Student {self.user_id} should auto-join session {session_id}")
-        
-        return should_join
-    
-    def on_session_available(self, handler):
-        """
-        Register handler for session_started events where student is enrolled
-        This provides a convenient way to handle new session notifications
-        """
-        async def session_started_handler(message):
+        async def session_assignment_handler(message):
             if message.context == "session_started" and isinstance(message.content, dict):
                 session_data = message.content
                 if self.user_id in session_data.get("student_ids", []):
-                    await handler(session_data)
+                    logger.info(f"🎓 Auto-assigned to session: {session_data.get('session_name', 'Unknown')}")
+                    await handler({
+                        "event": "session_assigned",
+                        "session_id": session_data.get("session_id"),
+                        "session_name": session_data.get("session_name"),
+                        "instructor_id": session_data.get("instructor_id"),
+                        "data": session_data
+                    })
         
-        self.on_message(MessageType.SYSTEM, session_started_handler)
+        self.on_message(MessageType.SYSTEM, session_assignment_handler)
+    
+    def on_moved_to_lobby(self, handler):
+        """
+        Register handler for when student is moved back to lobby (session ended)
+        """
+        async def lobby_move_handler(message):
+            if message.context == "session_left":
+                logger.info("📚 Moved back to lobby - session ended")
+                await handler({
+                    "event": "moved_to_lobby",
+                    "reason": message.content.get("reason", "session_ended") if message.content else "session_ended",
+                    "data": message.content
+                })
+        
+        self.on_message(MessageType.SYSTEM, lobby_move_handler)

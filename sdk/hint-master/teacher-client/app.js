@@ -13,7 +13,7 @@ const EXPERTS = [
 
 class HintMasterApp {
   constructor() {
-    this.teacher = new SwitchboardSDK.SwitchboardTeacher('teacher_001');
+    this.teacher = new SwitchboardTeacher('teacher_001');
     this.currentSession = null;
     this.experts = new Map();
     this.connectedUsers = new Map(); // LOBBY SYSTEM: Track online users
@@ -29,46 +29,50 @@ class HintMasterApp {
 
   setupEventHandlers() {
     // SDK event handlers - aligned with guideline message types
-    this.teacher.setupEventHandlers({
-      onStudentQuestion: (message) => this.handleInstructorInbox(message),
-      onStudentResponse: (message) => this.handleRequestResponse(message), 
-      onStudentAnalytics: (message) => this.handleAnalytics(message),
-      onConnection: (connected) => this.updateStatus(connected ? 'Connected' : 'Disconnected'),
-      onSystem: (message) => this.handleSystemMessage(message),
-      onHistoryComplete: () => console.log('Message history loaded'),
-      onError: (error) => this.handleError(error)
-    });
+    this.teacher.onStudentQuestion = (data) => this.handleInstructorInbox(data.fullMessage);
+    this.teacher.onStudentResponse = (data) => this.handleRequestResponse(data.fullMessage);
+    this.teacher.onStudentAnalytics = (data) => this.handleAnalytics(data.fullMessage);
+    this.teacher.onConnection = (connected) => this.updateStatus(connected ? 'Connected' : 'Disconnected');
+    this.teacher.onError = (error) => this.handleError(error);
     
     // LOBBY SYSTEM: Add presence and session management handlers
-    this.teacher.on('userConnected', (data) => {
-      this.connectedUsers.set(data.user_id, data);
-      this.updatePresenceDisplay();
-      console.log(`👥 User connected: ${data.user_id} (${data.role})`);
-    });
-    
-    this.teacher.on('userDisconnected', (data) => {
-      this.connectedUsers.delete(data.user_id);
-      this.updatePresenceDisplay();
-      console.log(`👥 User disconnected: ${data.user_id}`);
-    });
-    
-    this.teacher.on('sessionLeft', (data) => {
-      console.log(`🔄 Left session: ${data.session_id}`);
-      // UI will be updated by connection status handler
-    });
-    
-    this.teacher.on('sessionStarted', (data) => {
-      if (data.instructor_id === this.teacher.userId) {
-        console.log(`🚀 My session started: ${data.session_name}`);
-        this.updateSessionUI(data);
-      } else {
-        console.log(`ℹ️ Other session started: ${data.session_name}`);
+    this.teacher.onPresence = (data) => {
+      if (data.event === 'user_connected') {
+        this.connectedUsers.set(data.userId, data);
+        this.updatePresenceDisplay();
+        console.log(`👥 User connected: ${data.userId} (${data.role})`);
+      } else if (data.event === 'user_disconnected') {
+        this.connectedUsers.delete(data.userId);
+        this.updatePresenceDisplay();
+        console.log(`👥 User disconnected: ${data.userId}`);
       }
-    });
+    };
+    
+    this.teacher.onSessionEvent = (data) => {
+      if (data.event === 'session_left') {
+        console.log(`🔄 Left session: ${data.sessionId}`);
+        // Reset UI when session ends
+        this.resetSessionUI();
+        this.updateStatus('Connected to Lobby');
+        // Clear experts list since they're no longer in session
+        this.experts.forEach(expert => {
+          expert.connected = false;
+          expert.hints = [];
+        });
+        this.generateExpertPanels();
+      } else if (data.event === 'session_started') {
+        if (data.data.instructor_id === this.teacher.instructorId) {
+          console.log(`🚀 My session started: ${data.sessionName}`);
+          this.updateSessionUI(data.data);
+        } else {
+          console.log(`ℹ️ Other session started: ${data.sessionName}`);
+        }
+      }
+    };
 
-    // UI event handlers
+    // UI event handlers  
     document.getElementById('createSessionBtn').onclick = () => this.createSession();
-    document.getElementById('listSessionsBtn').onclick = () => this.listSessions();
+    document.getElementById('connectBtn').onclick = () => this.connectToSession();
     document.getElementById('endSessionBtn').onclick = () => this.endSession();
     document.getElementById('broadcastBtn').onclick = () => this.broadcastProblem();
     
@@ -159,13 +163,8 @@ class HintMasterApp {
       this.currentSession = null;
       
       this.resetSessionUI();
-      this.updateStatus('Disconnected');
+      this.updateStatus('Connected to Lobby');
       
-      // Refresh session list if it's visible
-      const sessionList = document.getElementById('sessionList');
-      if (sessionList.style.display === 'block') {
-        this.listSessions();
-      }
     } catch (error) {
       this.updateStatus('Error: ' + error.message);
     }
@@ -180,13 +179,13 @@ class HintMasterApp {
 
     try {
       // Use instructor_broadcast message type as per guideline
-      await this.teacher.sendBroadcast('problem', {
+      await this.teacher.announce({
         text: problem,
         code: document.getElementById('codeSnapshot').value.trim(),
         timeOnTask: parseInt(document.getElementById('timeOnTask').value) || 7,
         remainingTime: parseInt(document.getElementById('remainingTime').value) || 8,
         frustrationLevel: parseInt(document.getElementById('frustrationLevel').value) || 2
-      });
+      }, 'problem');
       
       this.showBroadcastStatus('Problem broadcast to all experts', 'success');
     } catch (error) {
@@ -255,7 +254,7 @@ class HintMasterApp {
   // Send direct response to a specific expert (inbox_response)
   async sendResponseToExpert(expertId, context, content) {
     try {
-      await this.teacher.sendResponse(expertId, context, content);
+      await this.teacher.respond(expertId, content, context);
     } catch (error) {
       console.error('Failed to send response:', error);
     }
@@ -264,92 +263,57 @@ class HintMasterApp {
   // Send direct request to a specific expert (request)
   async sendRequestToExpert(expertId, context, content) {
     try {
-      await this.teacher.sendRequest(expertId, context, content);
+      await this.teacher.ask(expertId, content, context);
     } catch (error) {
       console.error('Failed to send request:', error);
     }
   }
 
-  async listSessions() {
+  async connectToSession() {
     try {
-      const sessions = await this.teacher.listActiveSessions();
-      this.displaySessionList(sessions);
-    } catch (error) {
-      this.showBroadcastStatus('Failed to list sessions: ' + error.message, 'error');
-    }
-  }
-  
-  async selectSession(sessionId, sessionName) {
-    try {
-      // If already connected to a session, disconnect first
-      if (this.currentSession) {
-        this.teacher.disconnect();
-        this.resetSessionUI();
+      this.updateStatus('Connecting...');
+      
+      // Auto-assignment connection - server decides where to place us
+      await this.teacher.connect();
+      
+      // TIMING FIX: Wait a moment for server system messages to be processed
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      console.log(`🔍 DEBUG: Connection established. Session ID: ${this.teacher.getSessionId()}, isInSession: ${this.teacher.isInSession()}, isInLobby: ${this.teacher.isInLobby()}`);
+      
+      if (this.teacher.isInSession()) {
+        // We're in an active session
+        const sessionId = this.teacher.getSessionId();
+        this.currentSession = { id: sessionId, name: 'Active Session' };
+        
+        // Update UI
+        document.getElementById('currentSession').style.display = 'block';
+        document.getElementById('currentSessionId').textContent = sessionId.substring(0, 8) + '...';
+        document.getElementById('totalExperts').textContent = EXPERTS.length;
+        document.getElementById('broadcastBtn').disabled = false;
+        document.getElementById('endSessionBtn').disabled = false;
+        document.getElementById('createSessionBtn').disabled = true;
+        document.getElementById('connectBtn').disabled = true;
+        
+        this.updateStatus('Connected to Active Session');
+        console.log(`✅ DEBUG: UI updated for active session: ${sessionId}`);
+      } else if (this.teacher.isInLobby()) {
+        // We're in lobby - no active session
+        this.updateStatus('Connected to Lobby - No Active Session');
+        document.getElementById('createSessionBtn').disabled = false;
+        document.getElementById('connectBtn').disabled = true;
+        console.log(`🏛️ DEBUG: UI updated for lobby connection`);
+      } else {
+        console.log(`❓ DEBUG: Unknown connection state - sessionId: ${this.teacher.getSessionId()}`);
       }
       
-      this.updateStatus('Connecting to session...');
-      
-      // Connect to the selected session
-      await this.teacher.connect(sessionId);
-      
-      // Update current session info
-      this.currentSession = { id: sessionId, name: sessionName };
-      
-      // Update UI
-      document.getElementById('currentSession').style.display = 'block';
-      document.getElementById('currentSessionId').textContent = sessionId.substring(0, 8) + '...';
-      document.getElementById('totalExperts').textContent = EXPERTS.length;
-      document.getElementById('broadcastBtn').disabled = false;
-      document.getElementById('endSessionBtn').disabled = false;
-      document.getElementById('createSessionBtn').disabled = true;
-      
-      this.updateStatus('Connected');
       this.validateForm();
       
-      // Refresh the session list to update button states
-      this.listSessions();
-      
     } catch (error) {
-      this.updateStatus('Failed to connect to session: ' + error.message);
+      this.updateStatus('Failed to connect: ' + error.message);
     }
   }
 
-  displaySessionList(sessions) {
-    const container = document.getElementById('sessionsContainer');
-    const sessionList = document.getElementById('sessionList');
-    
-    if (sessions.length === 0) {
-      container.innerHTML = '<p>No active sessions found.</p>';
-    } else {
-      container.innerHTML = sessions.map(session => {
-        const isCurrentSession = this.currentSession && this.currentSession.id === session.id;
-        const buttonText = isCurrentSession ? 'Current Session' : 'Join Session';
-        const buttonClass = isCurrentSession ? 'secondary-btn' : 'primary-btn';
-        const buttonDisabled = isCurrentSession ? 'disabled' : '';
-        
-        return `
-          <div class="session-item ${isCurrentSession ? 'active' : ''}" data-session-id="${session.id}">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <strong>${session.name}</strong><br>
-                <small>ID: ${session.id.substring(0, 8)}... | Students: ${session.student_ids ? session.student_ids.length : 0} | Connections: ${session.connection_count || 0}</small>
-              </div>
-              <button 
-                class="${buttonClass}" 
-                onclick="app.selectSession('${session.id}', '${session.name.replace(/'/g, "\\'")}')"
-                ${buttonDisabled}
-              >
-                ${buttonText}
-              </button>
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-    
-    sessionList.style.display = 'block';
-    // Don't auto-hide the session list anymore
-  }
 
   validateForm() {
     const problem = document.getElementById('problemDescription').value.trim();
@@ -382,6 +346,8 @@ class HintMasterApp {
     document.getElementById('broadcastBtn').disabled = true;
     document.getElementById('endSessionBtn').disabled = true;
     document.getElementById('createSessionBtn').disabled = false;
+    // Only enable connect button if we're not already connected
+    document.getElementById('connectBtn').disabled = this.teacher.connected;
     this.currentSession = null;
   }
 

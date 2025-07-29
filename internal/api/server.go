@@ -24,6 +24,7 @@ type Registry interface {
 	// Auto-transition methods for Phase 4
 	GetLobbyConnections() []*websocket.Connection
 	TransitionUserToSession(userID, sessionID string) error
+	TransitionUserToLobby(userID string) error
 }
 
 // ARCHITECTURAL DISCOVERY: HTTP API layer serves as pure interface between external clients and internal components
@@ -93,9 +94,22 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	
 	switch r.Method {
 	case http.MethodGet:
-		s.getSession(w, r, sessionID)
+		// SPECIAL CASE: Handle /api/sessions/active to get the current active session
+		if sessionID == "active" {
+			log.Printf("🔍 DEBUG: API request for active session")
+			s.getActiveSession(w, r)
+		} else {
+			log.Printf("🔍 DEBUG: API request for specific session: %s", sessionID)
+			s.getSession(w, r, sessionID)
+		}
 	case http.MethodDelete:
-		s.endSession(w, r, sessionID)
+		// SPECIAL CASE: Handle /api/sessions/active to end the current active session
+		if sessionID == "active" {
+			log.Printf("🚩 DEBUG: API request to end active session")
+			s.endActiveSession(w, r)
+		} else {
+			s.endSession(w, r, sessionID)
+		}
 	case http.MethodOptions:
 		// CORS preflight handled by middleware
 		w.WriteHeader(http.StatusOK)
@@ -208,7 +222,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 				log.Printf("WARNING: Failed to auto-transition instructor %s to session %s: %v", userID, session.ID, err)
 			} else {
 				transitionedUsers = append(transitionedUsers, userID)
-				log.Printf("DEBUG: Auto-transitioned instructor %s from lobby to session %s", userID, session.ID)
+				log.Printf("🏫 DEBUG: Auto-transitioned instructor %s from lobby to session %s", userID, session.ID)
 			}
 		} else if role == "student" {
 			// Check if student is enrolled in this session
@@ -219,7 +233,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 						log.Printf("WARNING: Failed to auto-transition student %s to session %s: %v", userID, session.ID, err)
 					} else {
 						transitionedUsers = append(transitionedUsers, userID)
-						log.Printf("DEBUG: Auto-transitioned student %s from lobby to session %s", userID, session.ID)
+						log.Printf("🎓 DEBUG: Auto-transitioned student %s from lobby to session %s", userID, session.ID)
 					}
 					break
 				}
@@ -298,7 +312,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, sessionID st
 
 // FUNCTIONAL DISCOVERY: DELETE /api/sessions/{id} - End session
 func (s *Server) endSession(w http.ResponseWriter, r *http.Request, sessionID string) {
-	log.Printf("DEBUG: endSession() called for sessionID: %s", sessionID)
+	log.Printf("🚩 DEBUG: Attempting to end session - sessionID: %s", sessionID)
 	
 	// Get session information first to find all participants
 	session, err := s.sessionManager.GetSession(r.Context(), sessionID)
@@ -330,25 +344,87 @@ func (s *Server) endSession(w http.ResponseWriter, r *http.Request, sessionID st
 	
 	// Broadcast to all enrolled participants who are currently connected (regardless of their current session)
 	s.registry.BroadcastToUsers(allParticipants, sessionLeftMsg)
-	log.Printf("Broadcast session_left for session %s to %d participants", sessionID, len(allParticipants))
+	log.Printf("📢 DEBUG: Broadcast session_left for session %s to %d participants", sessionID, len(allParticipants))
+	
+	// CRITICAL FIX: Transition all participants from session back to lobby
+	// This ensures WebSocket connections are properly updated when session ends
+	for _, userID := range allParticipants {
+		if err := s.registry.TransitionUserToLobby(userID); err != nil {
+			log.Printf("WARNING: Failed to transition user %s to lobby: %v", userID, err)
+		}
+	}
+	log.Printf("🏛️ DEBUG: Transitioned all participants from session %s to lobby", sessionID)
 	
 	err = s.sessionManager.EndSession(r.Context(), sessionID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			s.sendError(w, "Session not found", http.StatusNotFound)
-		} else if strings.Contains(err.Error(), "already ended") {
-			s.sendError(w, "Session already ended", http.StatusBadRequest)
 		} else {
 			s.sendError(w, "Failed to end session", http.StatusInternalServerError)
 		}
 		return
 	}
+	log.Printf("✅ DEBUG: Session ended successfully via API - sessionID: %s", sessionID)
 	
 	// FUNCTIONAL DISCOVERY: Return simple success response
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]string{"message": "Session ended successfully"}); err != nil {
 		log.Printf("Failed to encode session end response: %v", err)
 	}
+}
+
+// FUNCTIONAL DISCOVERY: GET /api/sessions/active - Get the current active session
+func (s *Server) getActiveSession(w http.ResponseWriter, r *http.Request) {
+	session, err := s.sessionManager.GetActiveSession(r.Context())
+	if err != nil {
+		s.sendError(w, "Failed to get active session", http.StatusInternalServerError)
+		return
+	}
+	
+	if session == nil {
+		// No active session - return 404 as expected by client
+		s.sendError(w, "No active session", http.StatusNotFound)
+		return
+	}
+	
+	// Include current connection count from registry
+	connections := s.registry.GetSessionConnections(session.ID)
+	connectionCount := len(connections)
+	
+	if err := json.NewEncoder(w).Encode(SessionResponse{
+		Session:         session,
+		ConnectionCount: connectionCount,
+	}); err != nil {
+		log.Printf("Failed to encode active session response: %v", err)
+	}
+	
+	log.Printf("✅ DEBUG: Returned active session via API - sessionID: %s", session.ID)
+}
+
+// FUNCTIONAL DISCOVERY: DELETE /api/sessions/active - End the current active session
+// ARCHITECTURAL DISCOVERY: Simplifies client by removing need to track session IDs
+func (s *Server) endActiveSession(w http.ResponseWriter, r *http.Request) {
+	// Get the current active session
+	activeSession, err := s.sessionManager.GetActiveSession(r.Context())
+	if err != nil {
+		log.Printf("❌ DEBUG: Failed to get active session: %v", err)
+		s.sendError(w, "Failed to get active session", http.StatusInternalServerError)
+		return
+	}
+	
+	// IDEMPOTENCY: If no active session, return success
+	if activeSession == nil {
+		log.Printf("✅ DEBUG: No active session to end - idempotent success")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]string{"message": "No active session to end"}); err != nil {
+			log.Printf("Failed to encode response: %v", err)
+		}
+		return
+	}
+	
+	// Delegate to existing endSession logic
+	log.Printf("🎯 DEBUG: Found active session %s, delegating to endSession", activeSession.ID)
+	s.endSession(w, r, activeSession.ID)
 }
 
 // FUNCTIONAL DISCOVERY: GET /api/sessions - List active sessions with connection counts

@@ -125,12 +125,12 @@ class SwitchboardClient:
 
     # WebSocket Connection Management
     
-    async def connect(self, session_id: str) -> None:
+    async def connect(self, session_id: Optional[str] = None) -> None:
         """
-        Connect to a Switchboard session
+        Connect to Switchboard with auto-assignment
         
         Args:
-            session_id: Session ID to connect to
+            session_id: Optional session ID. If None, server will auto-assign to active session or lobby
             
         Raises:
             AuthenticationError: If not authorized for session
@@ -140,7 +140,7 @@ class SwitchboardClient:
         if self.role is None:
             raise SwitchboardError("Role must be set before connecting")
             
-        self.current_session_id = session_id
+        self.current_session_id = session_id or "lobby"  # Default to lobby for auto-assignment
         self._shutdown = False
         
         await self._establish_connection()
@@ -162,9 +162,13 @@ class SwitchboardClient:
         ws_base = self.server_url.replace("http://", "ws://").replace("https://", "wss://")
         params = {
             "user_id": self.user_id,
-            "role": self.role,
-            "session_id": self.current_session_id
+            "role": self.role
         }
+        
+        # Only include session_id if it's not lobby (for auto-assignment, exclude session_id)
+        if self.current_session_id != "lobby":
+            params["session_id"] = self.current_session_id
+            
         ws_url = f"{ws_base}/ws?{urlencode(params)}"
         
         try:

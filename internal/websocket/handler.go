@@ -105,13 +105,13 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 				if role == "instructor" {
 					// Instructors have universal access to active sessions
 					sessionID = activeSession.ID
-					log.Printf("DEBUG: Auto-assigned instructor %s to active session %s", userID, sessionID)
+					log.Printf("🏫 DEBUG: Auto-assigned instructor %s to active session %s", userID, sessionID)
 				} else if role == "student" {
 					// Check if student is enrolled in the active session
 					for _, studentID := range activeSession.StudentIDs {
 						if studentID == userID {
 							sessionID = activeSession.ID
-							log.Printf("DEBUG: Auto-assigned student %s to active session %s", userID, sessionID)
+							log.Printf("🎓 DEBUG: Auto-assigned student %s to active session %s", userID, sessionID)
 							break
 						}
 					}
@@ -121,11 +121,11 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			// If no auto-assignment occurred, assign to lobby
 			if sessionID == "" {
 				sessionID = "lobby"
-				log.Printf("DEBUG: Assigned %s %s to lobby (no active session or not enrolled)", role, userID)
+				log.Printf("🏛️ DEBUG: Assigned %s %s to lobby (no active session or not enrolled)", role, userID)
 			}
 		} else {
 			// Explicit sessionID provided - honor it (including explicit "lobby")
-			log.Printf("DEBUG: Using explicit sessionID: %s for %s %s", sessionID, role, userID)
+			log.Printf("🎯 DEBUG: Using explicit sessionID: %s for %s %s", sessionID, role, userID)
 		}
 	}
 	
@@ -153,13 +153,17 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Register connection with registry from Step 2.2
 	// FUNCTIONAL DISCOVERY: Registration after authentication ensures only valid
 	// connections are tracked and available for message routing
-	log.Printf("DEBUG: Registering connection - userID: %s, role: %s, sessionID: %s", userID, role, sessionID)
+	log.Printf("🔗 DEBUG: User connecting - userID: %s, role: %s, sessionID: %s", userID, role, sessionID)
 	if err := h.registry.RegisterConnection(wsConn); err != nil {
-		log.Printf("ERROR: Failed to register connection: %v", err)
+		log.Printf("❌ ERROR: Failed to register connection: %v", err)
 		_ = wsConn.Close()
 		return
 	}
-	log.Printf("SUCCESS: Connection registered successfully - userID: %s, role: %s, sessionID: %s", userID, role, sessionID)
+	log.Printf("✅ SUCCESS: User connected and registered - userID: %s, role: %s, sessionID: %s", userID, role, sessionID)
+	
+	// Send session assignment notification to client
+	// FUNCTIONAL DISCOVERY: Inform client about their session assignment for proper UI state
+	go h.sendSessionAssignmentNotification(wsConn)
 	
 	// Send session history in background
 	// ARCHITECTURAL DISCOVERY: Asynchronous history replay prevents blocking
@@ -244,6 +248,62 @@ func (h *Handler) sendSessionHistory(conn *Connection) {
 	}
 }
 
+// sendSessionAssignmentNotification informs the client about their current session assignment
+// FUNCTIONAL DISCOVERY: Session assignment notification enables proper client UI state management
+// distinguishing between lobby connections and active session connections
+func (h *Handler) sendSessionAssignmentNotification(conn *Connection) {
+	sessionID := conn.GetSessionID()
+	userID := conn.GetUserID()
+	role := conn.GetRole()
+	
+	if sessionID == "lobby" {
+		// User is in lobby
+		lobbyMsg := map[string]interface{}{
+			"type": "system",
+			"context": "lobby_assigned",
+			"content": map[string]interface{}{
+				"event":   "lobby_assigned",
+				"message": "Connected to lobby",
+				"user_id": userID,
+				"role":    role,
+			},
+			"timestamp": time.Now(),
+		}
+		if err := conn.WriteJSON(lobbyMsg); err != nil {
+			log.Printf("Failed to send lobby assignment message: %v", err)
+		}
+		log.Printf("🏛️ DEBUG: Sent lobby assignment notification to %s", userID)
+	} else {
+		// User is in active session - get session details
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		session, err := h.sessionManager.GetSession(ctx, sessionID)
+		if err != nil {
+			log.Printf("Failed to get session details for assignment notification: %v", err)
+			return
+		}
+		
+		sessionMsg := map[string]interface{}{
+			"type": "system", 
+			"context": "session_started",
+			"content": map[string]interface{}{
+				"event":        "session_started",
+				"session_id":   sessionID,
+				"session_name": session.Name,
+				"instructor_id": session.CreatedBy,
+				"message":      "Connected to active session",
+				"user_id":      userID,
+				"role":         role,
+			},
+			"timestamp": time.Now(),
+		}
+		if err := conn.WriteJSON(sessionMsg); err != nil {
+			log.Printf("Failed to send session assignment message: %v", err)
+		}
+		log.Printf("🎆 DEBUG: Sent session assignment notification to %s for session %s", userID, sessionID)
+	}
+}
+
 // handleConnection manages the connection lifecycle with heartbeat monitoring
 // ARCHITECTURAL DISCOVERY: Single goroutine per connection handles both heartbeat
 // and message reading to prevent goroutine proliferation and resource leaks
@@ -252,10 +312,10 @@ func (h *Handler) handleConnection(conn *Connection) {
 		// Clean up connection from registry and close resources
 		// FUNCTIONAL DISCOVERY: Deferred cleanup ensures resources are released
 		// even if connection handling panics or exits unexpectedly
-		log.Printf("DEBUG: Unregistering connection - userID: %s, role: %s, sessionID: %s", conn.GetUserID(), conn.GetRole(), conn.GetSessionID())
+		log.Printf("🔌 DEBUG: User disconnecting - userID: %s, role: %s, sessionID: %s", conn.GetUserID(), conn.GetRole(), conn.GetSessionID())
 		h.registry.UnregisterConnection(conn)
 		_ = conn.Close()
-		log.Printf("DEBUG: Connection cleanup complete - userID: %s", conn.GetUserID())
+		log.Printf("❌ DEBUG: User disconnected and cleaned up - userID: %s", conn.GetUserID())
 	}()
 	
 	// Set up ping/pong heartbeat monitoring

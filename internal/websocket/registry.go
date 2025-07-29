@@ -540,3 +540,56 @@ func (r *Registry) TransitionUserToSession(userID, sessionID string) error {
 
 	return nil
 }
+
+// TransitionUserToLobby moves a user from a session back to lobby
+// FUNCTIONAL DISCOVERY: Atomic operation for session cleanup when sessions end
+func (r *Registry) TransitionUserToLobby(userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Find user in global connections
+	conn, exists := r.globalConnections[userID]
+	if !exists {
+		return nil // User not connected, no error
+	}
+
+	role := conn.GetRole()
+	currentSessionID := conn.GetSessionID()
+
+	// Skip if already in lobby
+	if currentSessionID == "lobby" {
+		return nil
+	}
+
+	// Remove from current session
+	switch role {
+	case "student":
+		if sessionStudents, exists := r.sessionStudents[currentSessionID]; exists {
+			delete(sessionStudents, userID)
+		}
+	case "instructor":
+		if sessionInstructors, exists := r.sessionInstructors[currentSessionID]; exists {
+			delete(sessionInstructors, userID)
+		}
+	}
+
+	// Add to lobby
+	switch role {
+	case "student":
+		if r.sessionStudents["lobby"] == nil {
+			r.sessionStudents["lobby"] = make(map[string]*Connection)
+		}
+		r.sessionStudents["lobby"][userID] = conn
+	case "instructor":
+		if r.sessionInstructors["lobby"] == nil {
+			r.sessionInstructors["lobby"] = make(map[string]*Connection)
+		}
+		r.sessionInstructors["lobby"][userID] = conn
+	}
+
+	// Update connection's session ID
+	conn.SetSessionID("lobby")
+
+	log.Printf("🏛️ DEBUG: Transitioned user %s (%s) from session %s to lobby", userID, role, currentSessionID)
+	return nil
+}

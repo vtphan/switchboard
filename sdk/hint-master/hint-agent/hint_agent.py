@@ -44,7 +44,6 @@ class HintAgent:
         self.config_path = Path(config_path)
         self.config: Optional[ExpertConfig] = None
         self.client: Optional[SwitchboardStudent] = None
-        self.session = None
         self.shutdown_requested = False
         
         # Statistics
@@ -123,13 +122,14 @@ class HintAgent:
             # Set up event handlers
             self._setup_event_handlers()
             
-            # Connect to available session or lobby
-            self.session = await self.client.connect_to_available_session()
+            # Connect with auto-assignment - server decides session or lobby
+            connection_result = await self.client.connect()
             
-            if not self.session:
-                print("⚠️ No available sessions found. Connected to lobby, waiting for sessions...")
+            if self.client.is_in_session():
+                session_id = self.client.get_session_id()
+                print(f"✅ Auto-assigned to active session: {session_id}")
             else:
-                print(f"✅ Connected to session: {self.session.name} ({self.session.id})")
+                print("⚠️ Connected to lobby, waiting for active session...")
             
             # Send connection analytics
             await self._send_connection_analytics('connected')
@@ -146,7 +146,6 @@ class HintAgent:
     def _setup_event_handlers(self) -> None:
         """Setup event handlers for the Switchboard client"""
         
-        @self.client.on_instructor_broadcast
         async def handle_broadcast(message: Message) -> None:
             """Handle instructor broadcasts"""
             try:
@@ -161,14 +160,16 @@ class HintAgent:
             except Exception as e:
                 print(f"❌ Error handling broadcast: {e}")
         
-        @self.client.on_instructor_response
+        self.client.on_instructor_broadcast(handle_broadcast)
+        
         async def handle_response(message: Message) -> None:
             """Handle instructor responses"""
             from_user = getattr(message, 'from_user', 'instructor')
             text = message.content.get('text', 'Message received')
             print(f"💬 Response from {from_user}: {text}")
         
-        @self.client.on_connection
+        self.client.on_instructor_response(handle_response)
+        
         async def handle_connection(connected: bool) -> None:
             """Handle connection changes"""
             if connected:
@@ -185,14 +186,16 @@ class HintAgent:
                     except Exception as e:
                         print(f"⚠️ Could not send disconnection analytics: {e}")
                     
-                    # In lobby system, reconnection is handled automatically by SDK
+                    # In single-session system, reconnection is handled automatically by SDK
         
-        @self.client.on_error
+        # Note: on_connection is not a standard method in the SDK, we need to use the connection handlers list
+        
         async def handle_error(error: Exception) -> None:
             """Handle connection errors"""
             print(f"❌ Connection error: {error}")
         
-        @self.client.on_system_message
+        # Register error handler (this would need to be added to SDK)
+        
         async def handle_system_message(message: Message) -> None:
             """Handle system messages from the server"""
             try:
@@ -210,21 +213,19 @@ class HintAgent:
                     session_id = message.content.get("session_id", "unknown") if isinstance(message.content, dict) else "unknown"
                     print(f"🔄 Left session {session_id}: {reason}")
                     print(f"⏳ {self.config.name} returned to lobby, waiting for next session...")
-                    self.session = None
                     
                 elif event == "session_started":
                     session_data = message.content if isinstance(message.content, dict) else {}
                     session_id = session_data.get("session_id", "unknown")
                     session_name = session_data.get("session_name", "Unknown Session")
                     
-                    # Check if we're enrolled in this session
+                    # Check if we're enrolled in this session (single active session)
                     student_ids = session_data.get("student_ids", [])
                     if self.config.user_id in student_ids:
-                        print(f"🚀 New session available: {session_name} ({session_id})")
-                        print(f"✅ Auto-joining session (enrolled as {self.config.user_id})")
-                        # The SDK will handle auto-joining via _should_join_session
+                        print(f"🚀 Active session started: {session_name} ({session_id})")
+                        print(f"✅ Auto-assigned to session (enrolled as {self.config.user_id})")
                     else:
-                        print(f"ℹ️ New session started: {session_name} (not enrolled)")
+                        print(f"ℹ️ Active session started: {session_name} (not enrolled, staying in lobby)")
                 
                 elif event == "presence_update":
                     # Handle unified presence updates (replaces user_connected/disconnected/connection_replaced)
@@ -247,6 +248,8 @@ class HintAgent:
                     
             except Exception as e:
                 print(f"❌ Error handling system message: {e}")
+        
+        self.client.on_system_message(handle_system_message)
     
     async def _handle_problem_broadcast(self, problem_data: Dict[str, Any]) -> None:
         """Handle problem broadcast and generate hint"""

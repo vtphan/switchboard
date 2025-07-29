@@ -192,10 +192,10 @@ Connection States:
 - WebSocket connection registry tracks lobby and session connections
 - Session lifecycle state management (create/end operations)
 
-**⚠️ Partially Implemented Features:**
-- Auto-transition for lobby users when session is created (basic implementation)
-- Session lifecycle transitions (session_left notifications)
-- Auto-transition notifications (session_transition events) 
+**✅ Fully Implemented Features:**
+- Auto-transition for lobby users when session is created (comprehensive implementation)
+- Session lifecycle transitions (session_left notifications with UI updates)
+- Auto-transition notifications (session_transition events with client state updates) 
 
 **❌ Not Implemented Features:**
 - Database constraints prevent lobby message persistence (lobby messages not stored)
@@ -205,10 +205,12 @@ Connection States:
 - Python and JavaScript SDKs may need updates for lobby features
 
 **Current Behavior:**
-- Users can connect to lobby via `session_id=lobby` parameter
+- Users can connect to lobby via `session_id=lobby` parameter or auto-assignment
 - Lobby connections receive presence_update events for all users
 - Lobby connections cannot send/receive session messages (no persistence)
-- Manual session transitions work via reconnection with new session_id
+- **Seamless session transitions**: Users in lobby automatically transitioned to new sessions without reconnection
+- **Smart connection management**: Existing connections preserved during session creation to prevent disconnections
+- **Client state synchronization**: Both `session_started` and `session_transition` events update client session state
 
 ## 4. Data Models
 
@@ -428,11 +430,12 @@ Function CreateSession(instructor_id, session_data):
 Function EndSession(session_id):
   1. Get session details for participants list
   2. Broadcast session_left to all enrolled participants
-  3. Get all clients in session from connection maps
-  4. For each client: transition back to lobby (optional cleanup)
-  5. Update session.end_time in database
-  6. Update session.status to "ended"
-  7. Remove session from in-memory session_map
+  3. Transition all participants from session back to lobby atomically
+  4. Update session.end_time in database
+  5. Update session.status to "ended"
+  6. Remove session from in-memory session_map
+  
+Note: Users remain connected and are transitioned to lobby state, not disconnected
 ```
 
 ### 5.3 Client Connection Algorithm
@@ -1095,21 +1098,95 @@ Context field defaults to "general" when empty or omitted
 - **Logging**: Security events logged for monitoring
 - **No Encryption**: Transport-level security handled externally
 
-## 13. Single Session Architecture Benefits
+## 13. Session Lifecycle Management
 
-### 13.1 Simplified Implementation
+### 13.1 Seamless Session Transitions
+
+**Problem Solved**: Previous implementations caused WebSocket disconnections when users transitioned between lobby and session states, disrupting the user experience.
+
+**Solution**: Smart connection management that preserves existing WebSocket connections during session transitions.
+
+#### 13.1.1 Session Creation from Lobby
+When an instructor creates a session while connected to the lobby:
+
+1. **Smart Connection Logic**: SDK checks if already connected before establishing new connection
+2. **Server Auto-Transition**: Automatically moves instructor from lobby to new session
+3. **Client State Update**: Handles both `session_started` and `session_transition` events
+4. **UI Synchronization**: Teacher client updates interface based on transition events
+
+**Code Implementation**:
+```javascript
+// SDK automatically handles existing connections
+async createAndConnect(sessionName, studentIds) {
+  const session = await this.createSession(sessionName, studentIds);
+  
+  // Only connect if not already connected - prevents disconnection
+  if (!this.connected) {
+    await this.connect();
+  } else {
+    // Wait for server auto-transition to complete
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  
+  return session;
+}
+```
+
+#### 13.1.2 Session Ending Behavior
+When a session ends:
+
+1. **Lobby Transition**: All participants automatically moved to lobby state
+2. **Connection Preservation**: WebSocket connections remain active
+3. **UI Reset**: Client interfaces reset to lobby state
+4. **State Cleanup**: Expert connections and hints cleared for fresh start
+
+**Key Benefits**:
+- **No Reconnection Required**: Users stay connected throughout session lifecycle
+- **Instant Session Creation**: Instructors can create new sessions immediately after ending previous ones
+- **Seamless Experience**: No connection interruptions or authentication re-challenges
+
+#### 13.1.3 Event Handling Architecture
+```javascript
+// Client handles multiple transition events
+_handleSystemMessage(message) {
+  const event = message.context || message.content?.event;
+  
+  if (event === 'session_started' || event === 'session_transition') {
+    // Update session state for both events
+    this.currentSessionId = message.content?.session_id;
+    // Trigger UI updates
+  } else if (event === 'session_left') {
+    // Return to lobby state
+    this.currentSessionId = 'lobby';
+    // Reset session-specific UI elements
+  }
+}
+```
+
+### 13.2 Connection State Management
+
+**Registry Transition Methods**:
+- `TransitionUserToSession(userID, sessionID)`: Moves user from lobby to specific session
+- `TransitionUserToLobby(userID)`: Moves user from session back to lobby
+- `SetSessionID(sessionID)`: Updates connection's session identifier atomically
+
+**Atomic Operations**: All transitions occur within mutex-protected operations to prevent race conditions.
+
+## 14. Single Session Architecture Benefits
+
+### 14.1 Simplified Implementation
 - **Reduced Complexity**: Eliminates multi-session coordination and race conditions
 - **Clear Business Logic**: Single active session rule is easy to understand and implement
 - **Simplified Database Queries**: O(1) active session lookups vs O(n) multi-session searches
 - **Predictable Behavior**: Binary session state (active/ended) eliminates edge cases
 
-### 13.2 Enhanced User Experience
+### 14.2 Enhanced User Experience
 - **Teacher-Friendly**: Clear conflict resolution with helpful error messages
 - **Student Simplicity**: Automatic assignment eliminates session discovery complexity
 - **Seamless Transitions**: Lobby to session movement without reconnection
 - **Real-World Mapping**: Matches actual classroom usage patterns
 
-### 13.3 Performance Characteristics
+### 14.3 Performance Characteristics
 
 **Real-Time Performance (Validated via Load Testing):**
 - Message routing: **83.992µs average latency** (far exceeds <1ms target) 
@@ -1141,13 +1218,13 @@ Context field defaults to "general" when empty or omitted
 - Message persistence: **99.9% success rate** under classroom load conditions
 - Connection resilience: Graceful handling of disconnections and reconnections
 
-### 13.4 Operational Benefits
+### 14.4 Operational Benefits
 - **Channel-Based Concurrency**: Go channels ensure atomic session operations
 - **Auto-Assignment Performance**: < 10ms session assignment for 95% of connections
 - **Memory Efficiency**: Constant memory usage vs linear growth with session count
 - **Clear Error Handling**: HTTP 409 conflicts guide proper teacher workflow
 
-### 13.5 Architecture Validation
+### 14.5 Architecture Validation
 
 **✅ Validated Implementation Characteristics:**
 - **No Circular Dependencies**: Clean 5-layer architecture maintained (pkg → websocket → router → session → api)
