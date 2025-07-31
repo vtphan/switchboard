@@ -113,7 +113,9 @@ func TestMessageBroadcastWorkflows(t *testing.T) {
 				defer wg.Done()
 				studentID := fmt.Sprintf("student%d", studentIndex+1)
 				msg := createStudentQuestionMessage(questionText)
-				env.processor.ProcessIncomingMessage(msg, studentID)
+				if err := env.processor.ProcessIncomingMessage(msg, studentID); err != nil {
+					t.Logf("Failed to process message from %s: %v", studentID, err)
+				}
 			}(i, question)
 		}
 		wg.Wait()
@@ -331,7 +333,9 @@ func TestMessageBroadcastWorkflows(t *testing.T) {
 					"from_user": msg.FromUser,
 					"timestamp": msg.Timestamp,
 				})
-				lateJoiner.SendMessage(msgData)
+				if err := lateJoiner.SendMessage(msgData); err != nil {
+					t.Logf("Failed to send message to late joiner: %v", err)
+				}
 			}
 		}
 
@@ -432,7 +436,10 @@ func createActiveSession(t *testing.T, env *WorkflowEnvironment, sessionID strin
 func parseStudentIndex(studentID string) int {
 	// Extract number from "student1", "student2", etc.
 	var index int
-	fmt.Sscanf(studentID, "student%d", &index)
+	if _, err := fmt.Sscanf(studentID, "student%d", &index); err != nil {
+		// Return 0 as default if parsing fails
+		return 0
+	}
 	return index
 }
 

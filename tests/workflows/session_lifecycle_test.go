@@ -206,7 +206,9 @@ func TestSessionLifecycleWorkflows(t *testing.T) {
 		require.NoError(t, env.sessionManager.SetActiveSession(session))
 
 		// Simulate database becoming unavailable (close connection)
-		env.dbManager.Stop()
+		if err := env.dbManager.Stop(); err != nil {
+			t.Logf("Expected database stop during failure simulation: %v", err)
+		}
 
 		// Attempt to end session - should handle database failure gracefully
 		err := env.sessionManager.ClearActiveSession()
@@ -251,7 +253,9 @@ func TestSessionLifecycleWorkflows(t *testing.T) {
 
 		// Simulate timeout check and cleanup
 		if time.Since(session.StartTime) > time.Hour {
-			env.sessionManager.ClearActiveSession()
+			if err := env.sessionManager.ClearActiveSession(); err != nil {
+				t.Logf("Failed to clear active session during timeout cleanup: %v", err)
+			}
 		}
 
 		// Verify cleanup occurred
@@ -320,7 +324,10 @@ func setupWorkflowEnvironment(t *testing.T) *WorkflowEnvironment {
 
 func (env *WorkflowEnvironment) cleanup() {
 	env.connectionRegistry.Stop()
-	env.dbManager.Stop()
+	if err := env.dbManager.Stop(); err != nil {
+		// Use fmt.Printf since we don't have testing.T context here
+		fmt.Printf("Failed to stop database manager: %v\n", err)
+	}
 }
 
 func createStudentConnections(t *testing.T, env *WorkflowEnvironment, count int) []*TestConnection {
@@ -380,7 +387,10 @@ func createLateJoinerConnection(t *testing.T, env *WorkflowEnvironment, userID s
 				}
 				
 				msgData, _ := json.Marshal(msgMap)
-				conn.SendMessage(msgData)
+				if err := conn.SendMessage(msgData); err != nil {
+					// Log send error but don't fail the test as this simulates real connection issues
+					fmt.Printf("Failed to send message to connection %s: %v\n", conn.userID, err)
+				}
 			}
 		}
 	}

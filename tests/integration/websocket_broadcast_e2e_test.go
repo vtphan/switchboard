@@ -46,7 +46,11 @@ func TestWebSocketBroadcastE2E(t *testing.T) {
 
 		resp, err := http.Post(app.BaseURL+"/api/session/start", "application/json", bytes.NewReader(reqBody))
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				t.Logf("Failed to close response body: %v", err)
+			}
+		}()
 		require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 		// Connect WebSocket clients
@@ -173,7 +177,11 @@ func TestWebSocketBroadcastE2E(t *testing.T) {
 
 		resp, err := http.Post(app.BaseURL+"/api/session/start", "application/json", bytes.NewReader(reqBody))
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				t.Logf("Failed to close response body: %v", err)
+			}
+		}()
 
 		// Connect instructor to receive all messages
 		instructorConn, instructorMsgs := app.ConnectWebSocket(t, "instructor1", "instructor")
@@ -252,7 +260,11 @@ func TestWebSocketBroadcastE2E(t *testing.T) {
 
 		resp, err := http.Post(app.BaseURL+"/api/session/start", "application/json", bytes.NewReader(reqBody))
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				t.Logf("Failed to close response body: %v", err)
+			}
+		}()
 
 		// Connect clients
 		instructorConn, instructorMsgs := app.ConnectWebSocket(t, "instructor1", "instructor")

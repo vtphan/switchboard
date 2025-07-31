@@ -106,8 +106,6 @@ type TestMetrics struct {
 	registrations     int64
 	deregistrations   int64
 	readOperations    int64
-	_raceDetected     bool // Reserved for future race detection features
-	_memoryLeaks      bool // Reserved for future memory leak detection
 	errors            []string
 	startTime         time.Time
 	endTime           time.Time

@@ -127,7 +127,9 @@ func TestConnectionRecoveryAndMessagePersistence(t *testing.T) {
 					log.Printf("⚠️ Session check failed: %v", err)
 					continue
 				}
-				resp.Body.Close()
+				if err := resp.Body.Close(); err != nil {
+					log.Printf("Failed to close response body: %v", err)
+				}
 				switch resp.StatusCode {
 				case 409:
 					log.Println("✅ Session still active (conflict response confirms)")
@@ -304,7 +306,11 @@ func startSession() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Failed to close response body: %v", err)
+		}
+	}()
 	
 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
 		return fmt.Errorf("failed to start session: status %d", resp.StatusCode)
@@ -325,7 +331,11 @@ func cleanupDatabaseState() error {
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Printf("Failed to close database: %v", err)
+		}
+	}()
 	
 	// Clear all sessions to ensure clean state
 	_, err = db.Exec("UPDATE sessions SET status = 'ended' WHERE status = 'active'")
@@ -550,7 +560,11 @@ func validateDatabasePersistence(dbManager database.DatabaseManager) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Printf("Failed to close database: %v", err)
+		}
+	}()
 	
 	// Query message count
 	var count int
@@ -571,7 +585,9 @@ func closeAllClients(clients []*TestClient) {
 	for _, client := range clients {
 		client.active = false
 		if client.conn != nil {
-			client.conn.Close()
+			if err := client.conn.Close(); err != nil {
+				log.Printf("Failed to close client connection: %v", err)
+			}
 		}
 	}
 }

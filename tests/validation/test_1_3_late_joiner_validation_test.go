@@ -360,7 +360,10 @@ func setupComprehensiveTestEnvironment(t *testing.T) *ComprehensiveTestEnvironme
 
 func (env *ComprehensiveTestEnvironment) cleanup() {
 	env.connectionRegistry.Stop()
-	env.dbManager.Stop()
+	if err := env.dbManager.Stop(); err != nil {
+		// Use standard library log since we don't have testing.T context here
+		fmt.Printf("Failed to stop database manager: %v\n", err)
+	}
 }
 
 func createInstructorConnection(t *testing.T, env *ComprehensiveTestEnvironment, userID string) *ComprehensiveTestConnection {
@@ -407,7 +410,10 @@ func createLateJoinerConnection(t *testing.T, env *ComprehensiveTestEnvironment,
 			}
 			
 			msgData, _ := json.Marshal(msgMap)
-			conn.SendMessage(msgData)
+			if err := conn.SendMessage(msgData); err != nil {
+				// Log send error but don't fail the test as this is simulating network conditions
+				fmt.Printf("Failed to send message to connection %s: %v\n", conn.userID, err)
+			}
 		}
 	}
 	

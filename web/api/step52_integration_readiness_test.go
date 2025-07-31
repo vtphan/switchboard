@@ -73,7 +73,11 @@ func TestStep52IntegrationReadiness(t *testing.T) {
 		
 		resp, err := http.Post(server.URL+"/api/session/start", "application/json", bytes.NewReader(body))
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				t.Logf("Failed to close response body: %v", err)
+			}
+		}()
 		
 		assert.Equal(t, http.StatusCreated, resp.StatusCode, "Routing to StartSession should work")
 		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
@@ -82,7 +86,11 @@ func TestStep52IntegrationReadiness(t *testing.T) {
 		endBody, _ := json.Marshal(map[string]string{"instructor_id": "prof_route"})
 		resp2, err := http.Post(server.URL+"/api/session/end", "application/json", bytes.NewReader(endBody))
 		require.NoError(t, err)
-		defer resp2.Body.Close()
+		defer func() {
+			if err := resp2.Body.Close(); err != nil {
+				t.Logf("Failed to close response body: %v", err)
+			}
+		}()
 		
 		assert.Equal(t, http.StatusOK, resp2.StatusCode, "Routing to EndSession should work")
 	})

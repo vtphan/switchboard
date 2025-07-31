@@ -596,7 +596,10 @@ func setupPerformanceEnvironment(t *testing.T) *PerformanceEnvironment {
 
 func (env *PerformanceEnvironment) cleanup() {
 	env.connectionRegistry.Stop()
-	env.dbManager.Stop()
+	if err := env.dbManager.Stop(); err != nil {
+		// Use fmt.Printf since we don't have testing.T context here
+		fmt.Printf("Failed to stop database manager: %v\n", err)
+	}
 }
 
 func createPerformanceConnections(t *testing.T, env *PerformanceEnvironment, rolePrefix string, count int) []*PerformanceConnection {
@@ -700,7 +703,6 @@ type PerformanceConnection struct {
 	userID            string
 	role              string
 	deliveredMessages int64 // Use atomic counter instead of slice for performance
-	_mu               sync.RWMutex // Reserved for future thread-safe operations
 }
 
 func (pc *PerformanceConnection) GetUserID() string { return pc.userID }

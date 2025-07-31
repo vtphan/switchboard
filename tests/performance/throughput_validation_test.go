@@ -54,8 +54,6 @@ func TestTest31MessageThroughputValidation(t *testing.T) {
 		warmupTargetMsgPerSec = 300
 		targetMsgPerSec       = 500
 		burstMsgPerSec        = 700
-		
-		_totalDurationSec = warmupDurationSec + targetDurationSec + burstDurationSec // 120 seconds - reserved for future use
 	)
 	
 	t.Logf("Test Setup:")
@@ -389,7 +387,9 @@ func TestTest31MessageThroughputValidation(t *testing.T) {
 	time.Sleep(5 * time.Second)
 	
 	// Force flush any remaining batches
-	env.dbManager.Stop()
+	if err := env.dbManager.Stop(); err != nil {
+		t.Logf("Failed to stop database manager: %v", err)
+	}
 	time.Sleep(2 * time.Second)
 	
 	// Restart database manager for final verification
@@ -539,7 +539,10 @@ func setupThroughputTestEnvironment(t *testing.T) *ThroughputTestEnvironment {
 
 func (env *ThroughputTestEnvironment) cleanup() {
 	env.connectionRegistry.Stop()
-	env.dbManager.Stop()
+	if err := env.dbManager.Stop(); err != nil {
+		// Use fmt.Printf since we don't have testing.T context here
+		fmt.Printf("Failed to stop database manager: %v\n", err)
+	}
 }
 
 func createThroughputTestMessage(content string) []byte {
@@ -564,7 +567,6 @@ type ThroughputConnection struct {
 	userID             string
 	role               string
 	messagesDelivered  int64
-	_mu                sync.RWMutex // Reserved for future thread-safe operations
 }
 
 func (tc *ThroughputConnection) GetUserID() string { return tc.userID }

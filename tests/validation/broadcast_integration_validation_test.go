@@ -32,7 +32,11 @@ func TestBroadcastIntegrationValidation(t *testing.T) {
 
 		// Setup complete system
 		dbManager, sessionManager, messageProcessor, trackingConnections := setupValidationEnvironment(t)
-		defer dbManager.Stop()
+		defer func() {
+			if err := dbManager.Stop(); err != nil {
+				t.Logf("Failed to stop database manager: %v", err)
+			}
+		}()
 
 		// Create active session
 		session := &database.Session{

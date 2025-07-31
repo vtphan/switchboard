@@ -39,9 +39,6 @@ func TestTest32ConcurrentUserCapacity(t *testing.T) {
 	const (
 		testDurationSeconds = 30 // Scaled down to 30 seconds for practical testing
 		
-		// Capacity levels to test - gradual scaling
-		_capacityLevels = 3 // Reserved for future capacity level configuration
-		
 		// Realistic education patterns (scaled for test duration)
 		questionsPerStudentPer30Sec = 1   // Students ask 1 question per 30 seconds
 		responsesPerInstructorPer30Sec = 1 // Instructors send 1 response per 30 seconds
@@ -878,7 +875,10 @@ func (env *CapacityTestEnvironment) cleanup() {
 		env.connectionRegistry.Stop()
 	}
 	if env.dbManager != nil {
-		env.dbManager.Stop()
+		if err := env.dbManager.Stop(); err != nil {
+			// Use fmt.Printf since we don't have testing.T context here
+			fmt.Printf("Failed to stop database manager: %v\n", err)
+		}
 	}
 }
 

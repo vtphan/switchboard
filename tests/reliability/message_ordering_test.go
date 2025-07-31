@@ -240,7 +240,10 @@ func (mr *MockRecipient) SendMessage(data []byte) error {
 		if seq, ok := dbMsg.Content["sequence"].(float64); ok {
 			msg.Sequence = int(seq)
 		} else if contentStr != "" {
-			fmt.Sscanf(contentStr, "Message %d", &msg.Sequence)
+			if _, err := fmt.Sscanf(contentStr, "Message %d", &msg.Sequence); err != nil {
+				// Log parsing failure but continue
+				log.Printf("Failed to parse sequence number from content: %s", contentStr)
+			}
 		}
 	}
 	
@@ -285,7 +288,11 @@ func TestMessageOrderingUnderConcurrentLoad(t *testing.T) {
 	
 	err = sessionManager.SetActiveSession(testSession)
 	require.NoError(t, err, "Failed to set active session")
-	defer sessionManager.ClearActiveSession()
+	defer func() {
+		if err := sessionManager.ClearActiveSession(); err != nil {
+			t.Logf("Failed to clear active session: %v", err)
+		}
+	}()
 	
 	// Create rate limiter with high limits for this test  
 	rateLimiter := rate.NewRateLimiterWithConfig(1000, time.Minute) // 1000 messages per minute to avoid blocking
@@ -611,7 +618,9 @@ func BenchmarkMessageOrderingThroughput(b *testing.B) {
 				sessionManager := session.NewSessionManager(dbManager)
 				
 				benchSession, _ := database.NewSession("bench-session", "Benchmark Session", "bench-instructor")
-				sessionManager.SetActiveSession(benchSession)
+				if err := sessionManager.SetActiveSession(benchSession); err != nil {
+					b.Fatalf("Failed to set active session: %v", err)
+				}
 				
 				rateLimiter := rate.NewRateLimiterWithConfig(10000, time.Minute) // High limit for benchmarking
 				
@@ -653,13 +662,18 @@ func BenchmarkMessageOrderingThroughput(b *testing.B) {
 							}
 							
 							messageData, _ := json.Marshal(dbMessage)
-							processor.ProcessIncomingMessageSync(messageData, senderID)
+							if err := processor.ProcessIncomingMessageSync(messageData, senderID); err != nil {
+								// Don't fail benchmark, just log error
+								b.Logf("Failed to process message: %v", err)
+							}
 						}
 					}(userID)
 				}
 				
 				wg.Wait()
-				sessionManager.ClearActiveSession()
+				if err := sessionManager.ClearActiveSession(); err != nil {
+					b.Logf("Failed to clear active session: %v", err)
+				}
 			}
 		})
 	}
