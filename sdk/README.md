@@ -9,12 +9,12 @@ Multi-language SDK collection for Switchboard V4 educational communication syste
 **Status**: ✅ Complete  
 **Package**: [`switchboard-client`](https://www.npmjs.com/package/switchboard-client)
 
-A comprehensive JavaScript/TypeScript SDK with:
+A focused JavaScript/TypeScript SDK with:
 - Core WebSocket client for real-time messaging
-- Rich UI components with built-in theming
-- Advanced search and filtering capabilities
+- Message search and filtering capabilities
 - Complete TypeScript definitions
 - Browser and Node.js support
+- Separate teacher/student example applications
 
 **Quick Start**:
 ```bash
@@ -71,15 +71,16 @@ instructor.broadcast_to_students('announcement')
 ```
 sdk/
 ├── README.md              # This overview (you are here)
-├── package.json           # Workspace configuration
 ├── javascript/            # JavaScript SDK
 │   ├── README.md          # JavaScript SDK documentation
 │   ├── package.json       # JavaScript package config
 │   ├── src/               # Core client implementation
-│   ├── ui/                # UI components and styling
-│   ├── examples/          # Usage examples
-│   └── ...
-├── python/                # Python SDK (planned)
+│   ├── examples/          # MVC example applications
+│   │   ├── student/       # Student client example
+│   │   ├── teacher/       # Teacher client example
+│   │   └── shared-styles.css # Shared styling
+│   ├── switchboard-client.js  # Standalone build
+│   └── switchboard-client.d.ts # TypeScript definitions
 ├── student-client-sdk.md  # Student client specification
 └── teacher-client-sdk.md  # Teacher client specification
 ```
@@ -94,33 +95,20 @@ sdk/
 ### JavaScript SDK Development
 
 ```bash
-# Install dependencies
-npm run install:js
+# Navigate to JavaScript SDK
+cd javascript/
 
-# Build the SDK
-npm run build:js
+# Install dependencies
+npm install
 
 # Run tests
-npm run test:js
+npm test
 
-# Start development mode
-npm run dev:js
+# Start development server (examples)
+npm run dev
 
 # Lint code
-npm run lint:js
-```
-
-### All SDKs
-
-```bash
-# Build all available SDKs
-npm run build:all
-
-# Test all available SDKs
-npm run test:all
-
-# Lint all available SDKs
-npm run lint:all
+npm run lint
 ```
 
 ## 📋 Client Specifications

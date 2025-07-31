@@ -1,6 +1,6 @@
 # Switchboard JavaScript Client SDK
 
-A comprehensive, single-file JavaScript library for connecting to Switchboard V4 educational communication system. Uses explicit protocol method names for complete transparency.
+A focused JavaScript library for connecting to Switchboard V4 educational communication system. Uses explicit protocol method names for complete transparency and includes realistic teacher/student client examples.
 
 ## 🏗️ Architecture
 
@@ -20,19 +20,19 @@ javascript/
 ├── src/
 │   ├── client.js          # Core WebSocket client
 │   └── helpers.js         # Non-opinionated helper functions
-├── ui/
-│   ├── index.js           # UI package entry point
-│   ├── styles.css         # Complete CSS theme system
-│   └── components/
-│       ├── ui.js          # Rich UI components
-│       └── search.js      # Advanced search API
-├── examples/              # Usage examples
-│   ├── basic-integration.html      # Layer 1 (helpers)
-│   ├── advanced-ui.html            # Layer 2 (UI components)
-│   └── layer-comparison.html       # Side-by-side comparison
+├── examples/              # MVC example applications
+│   ├── README.md          # Examples documentation
+│   ├── shared-styles.css  # Shared CSS styling
+│   ├── student/           # Student client example
+│   │   ├── index.html     # Student UI structure
+│   │   └── student-app.js # Student application logic
+│   └── teacher/           # Teacher client example
+│       ├── index.html     # Teacher UI structure
+│       └── teacher-app.js # Teacher application logic
 ├── index.js               # Package entry point
 ├── switchboard-client.js  # Standalone build
-└── switchboard-client.d.ts # TypeScript definitions
+├── switchboard-client.d.ts # TypeScript definitions
+└── test-integration.html  # Basic integration test
 ```
 
 ## Quick Start
@@ -69,10 +69,6 @@ yarn add switchboard-client
 ```html
 <!-- Core SDK only -->
 <script src="https://unpkg.com/switchboard-client@latest/dist/switchboard-client.umd.js"></script>
-
-<!-- With UI components -->
-<script src="https://unpkg.com/switchboard-client@latest/dist/ui/switchboard-ui.umd.js"></script>
-<link rel="stylesheet" href="https://unpkg.com/switchboard-client@latest/ui/styles.css">
 ```
 
 **ES Modules**:
@@ -83,13 +79,8 @@ import SwitchboardClient from 'switchboard-client';
 // With non-opinionated helpers
 import { SwitchboardClient, helpers } from 'switchboard-client';
 
-// Full UI components
-import { SwitchboardClient, SwitchboardUI } from 'switchboard-client/ui';
-import 'switchboard-client/ui/styles.css';
-
 // Local development (if cloning repository)
-import SwitchboardClient from './javascript/src/client.js';
-import { SwitchboardUI } from './javascript/ui/index.js';
+import SwitchboardClient from './switchboard-client.js';
 ```
 
 **CommonJS**:
@@ -99,9 +90,6 @@ const SwitchboardClient = require('switchboard-client');
 
 // With helpers
 const { SwitchboardClient, helpers } = require('switchboard-client');
-
-// Full UI (requires additional setup for CSS)
-const { SwitchboardClient, SwitchboardUI } = require('switchboard-client/ui');
 ```
 
 ### Basic Usage
@@ -853,7 +841,7 @@ This SDK implements the complete Switchboard V4 protocol:
 - ✅ **Message Size**: 64KB limit with validation
 - ✅ **Session Management**: Full session lifecycle support
 - ✅ **Error Handling**: Complete error code coverage
-- ✅ **Connection Management**: Clean connect/disconnect with message queuing
+- ✅ **Connection Management**: Clean connect/disconnect with message queuing (no automatic reconnection)
 - ✅ **Role Filtering**: Receive-side filtering (send-side transparent)
 
 ## Browser Support
@@ -877,201 +865,62 @@ npm install ws
 
 ### Search/Filter API
 
-The SDK includes powerful message search and filtering capabilities:
+The SDK includes basic message search and filtering capabilities:
 
 ```javascript
-// Search for recent questions
-const recentQuestions = client.search
-  .where('type', 'broadcast_to_instructors')
-  .where('context', 'question')
-  .since('1h ago')
-  .orderBy('timestamp', 'desc')
-  .get();
+// Search for messages by text
+const results = client.search.byText('loops');
 
-// Find messages with code snippets
-const codeMessages = client.search
-  .having('content.code_snippet')
-  .containing('loop')
-  .get();
+// Get messages by type
+const questions = client.search.byType('broadcast_to_instructors');
 
-// Group messages by type and count
-const messageStats = client.search
-  .groupBy('type')
-  .having(messages => messages.length > 5)
-  .get();
+// Get messages by context
+const announcements = client.search.byContext('announcement');
 
-// Complex queries
-const urgentQuestions = client.search
-  .where('type', 'broadcast_to_instructors')
-  .where('content.urgency', 'urgent')
-  .notReferenced()  // Questions without responses
-  .since('30m ago')
-  .orderBy('timestamp', 'desc')
-  .limit(10)
-  .get();
+// Get messages from specific user
+const userMessages = client.search.byUser('alice_student');
+
+// Get recent messages
+const recent = client.search.recent(10);
 ```
 
 **Available Search Methods:**
-- `where(field, value)` - Filter by field value
-- `containing(text)` - Text search in message content
-- `having(field)` / `notHaving(field)` - Check field existence
-- `since(time)` / `before(time)` - Time range filtering
-- `between(start, end)` - Time range
-- `referencedBy(messageId)` - Find replies to a message
-- `notReferenced()` - Find messages without replies
-- `groupBy(field)` - Group results by field
-- `orderBy(field, direction)` - Sort results
-- `limit(count)` / `offset(count)` - Pagination
-- `count()` / `first()` / `last()` - Result methods
+- `byText(searchText)` - Text search in message content
+- `byType(messageType)` - Filter by message type
+- `byContext(context)` - Filter by message context
+- `byUser(userId)` - Filter by sender
+- `recent(count)` - Get recent messages
 
-### Message Helpers
+### Example Applications
 
-Built-in utilities for working with messages:
+The SDK includes complete MVC example applications:
 
-```javascript
-// Format messages for display
-const formatted = client.helpers.formatMessage(message);
-console.log(formatted.timeAgo);  // "5m ago"
-console.log(formatted.excerpt);  // Truncated text
+**Student Client Example** (`examples/student/`):
+- Clean HTML structure (`index.html`)
+- Complete application logic (`student-app.js`)
+- Real-time messaging with instructors
+- Question submission and progress tracking
 
-// Check connection status
-const status = client.helpers.getConnectionStatus();
-console.log(status.canSendMessages);  // true/false
+**Teacher Client Example** (`examples/teacher/`):
+- Clean HTML structure (`index.html`) 
+- Complete application logic (`teacher-app.js`)
+- Session management (start/end sessions)
+- Student question monitoring
+- Class announcements
 
-// Group messages into conversation threads
-const threads = client.helpers.groupMessageThreads(messages);
-threads.forEach(thread => {
-  console.log(`Thread started by: ${thread.original.from_user}`);
-  console.log(`Responses: ${thread.responses.length}`);
-  console.log(`Resolved: ${thread.isResolved}`);
-});
-
-// Parse code from messages
-const codeInfo = client.helpers.parseCode(message.content);
-if (codeInfo) {
-  console.log(`Language: ${codeInfo.language}`);
-  console.log(`Complete: ${codeInfo.isComplete}`);
-}
-
-// Extract @mentions
-const mentions = client.helpers.extractMentions(message.content.text);
-mentions.forEach(username => console.log(`Mentioned: ${username}`));
-```
-
-### Optional UI Components
-
-For rapid development, use the optional UI library (requires separate import):
-
-```html
-<script src="javascript/switchboard-client.js"></script>
-<script src="javascript/ui/switchboard-ui.js"></script>
-```
-
-```javascript
-// Create UI components
-const client = new SwitchboardClient(options);
-const ui = new SwitchboardUI(client, {
-  theme: 'light',  // 'light', 'dark', 'auto', or custom theme object
-  animations: true,
-  sounds: false
-});
-
-// Message list with rich features
-const messageList = ui.createMessageList('#messages', {
-  showAvatars: true,
-  enableReactions: true,
-  codeHighlighting: 'prism',  // 'prism', 'highlight.js', or false
-  bubbles: true,
-  threadLines: false
-});
-
-// Smart message input
-const input = ui.createMessageInput('#input', {
-  codeButton: true,
-  autoComplete: true,
-  characterLimit: true,
-  templates: [
-    { name: 'Question', preview: 'I have a question about...' },
-    { name: 'Code Help', preview: 'Can you help with this code?' }
-  ]
-});
-
-// Connection status badge
-const badge = ui.createStatusBadge('#status', {
-  showUserCount: true,
-  showSessionInfo: true,
-  pulseOnActivity: true
-});
-
-// Complete dashboard
-const dashboard = ui.createDashboard('#app', {
-  layout: 'student',  // 'student' or 'instructor'
-  components: ['messageList', 'activeQuestions', 'studentRoster']
-});
-
-// Enable browser notifications
-ui.enableNotifications({
-  desktop: true,
-  sounds: true,
-  vibration: true
-});
-
-// Theme management
-ui.setTheme('dark');
-ui.setTheme({
-  colors: {
-    'bg-primary': '#1a1a1a',
-    'accent': '#00d4aa'
-  }
-});
-```
-
-**UI Component Features:**
-- **Message List**: Avatar support, code highlighting, reactions, threading
-- **Message Input**: Templates, code insertion, auto-complete, drag-drop
-- **Status Badge**: Live connection status, session info, activity pulse
-- **Dashboard**: Role-specific layouts with analytics and controls
-- **Notifications**: Desktop notifications, sound effects, vibration
-- **Theming**: Light/dark/auto themes with custom color support
-
-### Non-Opinionated Helpers
-
-For custom UIs, use the lightweight helper functions:
-
-```javascript
-// Import non-opinionated helpers
-import { helpers } from './javascript/ui/index.js';
-
-// Create basic message elements
-const messageEl = helpers.createMessageElement(message, {
-  className: 'my-message',
-  currentUser: 'alice'
-});
-
-// Format messages without styling
-const formatted = helpers.formatMessage(message, {
-  includeFormatted: true,
-  currentUser: 'alice'
-});
-
-// Create status indicators
-const status = helpers.createStatusIndicator('connected');
-
-// Group messages by time
-const groups = helpers.groupMessagesByTime(messages, 'hour');
-
-// Extract mentions and other content
-const mentions = helpers.extractMentions(messageText);
-const elements = helpers.parseMessageContent(message.content);
-```
+**Shared Styling** (`examples/shared-styles.css`):
+- Professional, responsive design
+- Dark theme support
+- Message bubble styling
+- Connection status indicators
 
 ## TypeScript Support
 
 Full TypeScript definitions are included:
 
 ```typescript
-import SwitchboardClient from './javascript/src/client.js';
-import type { Message, MessageType, Session } from './javascript/switchboard-client';
+import SwitchboardClient from './switchboard-client.js';
+import type { Message, MessageType, Session } from './switchboard-client';
 
 const client = new SwitchboardClient({
   userId: 'alice',
@@ -1080,27 +929,19 @@ const client = new SwitchboardClient({
 });
 
 // Type-safe message building
-const message: MessageBuilder = client.broadcast_to_instructors('helpRequest')
+const message = client.broadcast_to_instructors('helpRequest')
   .withText('How do loops work?')
   .withCode('for i := 0; i < 10; i++', 'go')
   .withTags('loops', 'golang');
 
 // Type-safe search API
-const results: Message[] = client.search
-  .where('type', 'broadcast_to_instructors' as MessageType)
-  .containing('loop')
-  .get();
-
-// Optional UI components with types
-import { SwitchboardUI } from './ui/switchboard-ui';
-const ui = new SwitchboardUI(client);
+const results: Message[] = client.search.byType('broadcast_to_instructors');
 ```
 
 **TypeScript Features:**
 - Complete type definitions for all SDK methods
 - Generic types for search results and message content
 - Interface definitions for all events and options
-- Optional UI component types (separate module)
 
 ## License
 
