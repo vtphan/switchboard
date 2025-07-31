@@ -1,0 +1,16 @@
+server:
+  host: "localhost"
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 30s
+  
+database:
+  path: "./db/switchboard.db"
+  
+logging:
+  level: "debug"
+  file: "./logs/switchboard.log"
+  
+websocket:
+  check_origin: true
+  handshake_timeout: 10s
