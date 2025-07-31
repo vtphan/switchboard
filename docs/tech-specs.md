@@ -97,42 +97,60 @@ func (cr *ConnectionRegistry) cleanupStaleConnections() {
 }
 ```
 
-### 3.2 Client Heartbeat Requirements
+### 3.2 WebSocket Protocol Ping/Pong Requirements
 
-WebSocket clients must support the **standard WebSocket ping/pong protocol**:
+Switchboard uses **WebSocket protocol-level ping/pong frames** (RFC 6455) for connection health monitoring:
 
 #### **Server Behavior**
-- Server sends WebSocket PING frames every 30 seconds
-- Server tracks last heartbeat time per connection
-- Failed ping responses indicate dead connections
+- Server sends WebSocket PING control frames every 30 seconds
+- Empty payload: `[]byte{}`
+- Write deadline: 5 seconds
+- Connections that fail to respond with PONG are terminated
 
-#### **Client Requirements**
-Most WebSocket libraries handle ping/pong automatically:
+#### **Client Requirements - Automatic Support**
+All major WebSocket libraries handle ping/pong automatically:
 
+**JavaScript (Browser)**
 ```javascript
-// JavaScript - Automatic handling (no code needed)
 const ws = new WebSocket('ws://localhost:8080/ws?user_id=student1&role=student');
-// Browser WebSocket API handles ping/pong internally
+// Browser automatically responds to ping frames with pong frames
+// No application code required - handled at protocol level
+```
 
-// Go client - Automatic handling  
-conn, _, err := websocket.DefaultDialer.Dial(url, nil)
-// Gorilla WebSocket handles ping/pong automatically
-
-// Python websockets library - Automatic handling
+**Python (websockets library)**
+```python
+import asyncio
 import websockets
-ws = await websockets.connect("ws://localhost:8080/ws")
-# Library handles ping/pong automatically
+
+async with websockets.connect("ws://localhost:8080/ws") as ws:
+    # Library automatically handles ping/pong
+    # Default: responds to pings, sends keepalive pings every 20s
+    async for message in ws:
+        print(message)
 ```
 
-#### **Manual Implementation (if needed)**
-For clients that don't auto-handle ping/pong:
+**Go (Gorilla WebSocket)**
+```go
+conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+// Default ping handler automatically responds with pong
+// Application must read connection to process control frames
 
-```javascript
-// Manual ping/pong handling
-ws.addEventListener('ping', function(event) {
-    ws.pong(); // Respond to server ping
-});
+go func() {
+    for {
+        _, _, err := conn.ReadMessage()
+        if err != nil {
+            break // Connection closed or error
+        }
+    }
+}()
 ```
+
+#### **Protocol Specification**
+- **Ping Frame**: WebSocket control frame (opcode 0x9)
+- **Pong Frame**: WebSocket control frame (opcode 0xA) 
+- **Automatic Response**: Client libraries MUST respond to ping with pong
+- **Timeout**: Server waits maximum 30 seconds for pong response
+- **Connection Termination**: No pong response = dead connection cleanup
 
 ### 3.3 Connection State Transitions
 
@@ -712,9 +730,86 @@ Function resetTimer():
   When timer expires: call flushBatch()
 ```
 
-## 8. API Specifications
+## 8. WebSocket Protocol Specifications
 
-### 8.1 Session Management API
+### 8.1 Message Size and Format Constraints
+
+**Message Size Limits**
+- **Maximum Message Size**: 64KB (65,536 bytes) per WebSocket frame
+- **Encoding**: UTF-8 JSON text messages only
+- **Frame Type**: WebSocket text frames (opcode 0x1)
+- **Violation Handling**: Messages exceeding 64KB result in connection termination
+
+**Message Structure Requirements**
+```json
+{
+  "type": "broadcast_to_instructors" | "direct_message" | "broadcast_to_students",
+  "context": "question" | "response" | "announcement" | ... ,
+  "content": { /* arbitrary JSON object */ },
+  "to_user": "optional_recipient_id"  // Required for direct_message only
+}
+```
+
+### 8.2 Connection Close Protocol
+
+**Graceful Shutdown**
+- **Close Code**: 1001 (Going Away)
+- **Close Reason**: "Server shutting down"
+- **Client Behavior**: Attempt reconnection after receiving close frame
+
+**Connection Termination Scenarios**
+- Ping timeout (no pong response within 30 seconds)
+- Message size violation (exceeds 64KB)
+- Authentication failure during connection establishment
+- Rate limit violations (excessive message sending)
+
+### 8.3 Error Message Format
+
+**WebSocket Error Messages**
+All errors are sent as JSON messages over the WebSocket connection:
+
+```json
+{
+  "type": "error",
+  "error": "rate_limit_exceeded",
+  "message": "Maximum 100 messages per minute exceeded",
+  "timestamp": "2025-01-15T14:37:00Z"
+}
+```
+
+**Standard Error Codes**
+- `no_active_session` - Message sent without active session
+- `rate_limit_exceeded` - User exceeded 100 messages/minute
+- `invalid_message` - Malformed JSON or missing required fields
+- `invalid_message_type` - Unknown message type
+- `invalid_recipient` - Direct message to non-existent user
+- `message_too_large` - Message exceeds 64KB limit
+
+### 8.4 Session History Delivery Protocol
+
+**Late Joiner Message Sequence**
+1. **Connection State**: Session active/waiting message
+2. **Historical Messages**: All session messages (role-filtered), chronological order
+3. **History Complete**: System message indicating end of history
+
+```json
+{
+  "type": "system",
+  "content": {
+    "event": "history_delivered",
+    "message": "Session history for Exercise 3: For Loops delivered"
+  },
+  "timestamp": "2025-01-15T14:35:00Z"
+}
+```
+
+**Message Filtering Rules**
+- **Students**: See own messages + direct messages involving them + broadcasts to students
+- **Instructors**: See all messages without filtering
+
+## 9. HTTP API Specifications
+
+### 9.1 Session Management API
 
 **Start Session**
 ```http

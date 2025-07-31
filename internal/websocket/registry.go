@@ -52,7 +52,12 @@ func (cr *ConnectionRegistry) Register(userID string, conn ConnectionInterface) 
 
 	// Check if user already connected - close existing connection
 	if existingConn, exists := cr.connections[userID]; exists {
-		_ = existingConn.Close()
+		// Use CloseWithCode to notify client it was replaced
+		if closer, ok := existingConn.(*Connection); ok {
+			_ = closer.CloseWithCode(4001, "replaced by newer connection")
+		} else {
+			_ = existingConn.Close()
+		}
 	}
 
 	// Store new connection

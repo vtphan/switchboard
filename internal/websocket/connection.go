@@ -178,6 +178,20 @@ func (c *Connection) GetLastSeen() time.Time {
 	return c.lastSeen.Load().(time.Time)
 }
 
+// CloseWithCode sends a close frame with specific code and reason before closing
+func (c *Connection) CloseWithCode(code int, reason string) error {
+	// Send close message through the write channel to maintain single-writer pattern
+	closeMessage := websocket.FormatCloseMessage(code, reason)
+	select {
+	case c.sendCh <- closeMessage:
+		// Give time for close message to be sent
+		time.Sleep(100 * time.Millisecond)
+	default:
+		// Channel full or closed, proceed anyway
+	}
+	return c.Close()
+}
+
 // Close performs idempotent cleanup of connection resources
 func (c *Connection) Close() error {
 	select {

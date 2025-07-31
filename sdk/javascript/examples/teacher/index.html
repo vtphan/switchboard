@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Switchboard Teacher Client</title>
+    <link rel="stylesheet" href="../shared-styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header teacher-header">
+            <h1>🎓 Teacher Client</h1>
+            <p>Manage sessions, respond to questions, and broadcast to students</p>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="status" id="status">
+            <div class="status-dot" id="statusDot"></div>
+            <div>
+                <div class="status-text" id="statusText">Disconnected</div>
+                <div class="session-info" id="sessionInfo">No active session</div>
+                <div class="session-details" id="sessionDetails" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- Connection Controls -->
+        <div class="controls">
+            <h3>Connection</h3>
+            <div class="input-group">
+                <input type="text" id="teacherId" placeholder="Your teacher ID" value="prof_smith">
+                <button id="connectBtn" class="primary">Connect</button>
+                <button id="disconnectBtn" class="secondary" disabled>Disconnect</button>
+            </div>
+        </div>
+
+        <!-- Session Management -->
+        <div class="controls">
+            <h3>Session Management</h3>
+            <div class="input-group" id="startSessionGroup">
+                <input type="text" id="sessionName" placeholder="Session name..." value="Introduction to JavaScript">
+                <button id="startSessionBtn" class="success" disabled>Start Session</button>
+            </div>
+            <div class="input-group" id="endSessionGroup" style="display: none;">
+                <div id="activeSessionInfo" style="flex: 1; padding: 12px; background: #f0fff4; border: 1px solid #48bb78; border-radius: 6px; color: #2f855a;">
+                    <strong>Active Session:</strong> <span id="activeSessionName"></span><br>
+                    <small>Session ID: <span id="activeSessionId"></span></small>
+                </div>
+                <button id="endSessionBtn" class="danger">End Session</button>
+            </div>
+        </div>
+
+        <!-- Broadcast Announcement -->
+        <div class="controls">
+            <h3>Send Announcement</h3>
+            <div class="input-group">
+                <textarea id="announcementText" placeholder="Announcement to all students..." rows="3"></textarea>
+            </div>
+            <div class="input-group">
+                <button id="announceBtn" class="primary" disabled>Send Announcement</button>
+                <button id="importantBtn" class="danger" disabled>Send as Important</button>
+            </div>
+        </div>
+
+        <!-- Messages from Students -->
+        <div class="messages-section">
+            <div class="messages-header">
+                💬 Student Messages & Questions
+            </div>
+            <div class="messages" id="messages"></div>
+        </div>
+
+        <!-- Quick Response -->
+        <div class="controls">
+            <h3>Quick Response</h3>
+            <div class="input-group">
+                <input type="text" id="responseToStudent" placeholder="Student ID to respond to..." readonly>
+                <textarea id="responseText" placeholder="Your response..." rows="2"></textarea>
+            </div>
+            <div class="input-group">
+                <button id="responseBtn" class="success" disabled>Send Response</button>
+                <button id="clearResponseBtn" class="secondary">Clear</button>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats">
+            <div class="stat-card">
+                <span class="stat-number" id="studentsCount">0</span>
+                <div class="stat-label">Active Students</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="questionsCount">0</span>
+                <div class="stat-label">Questions Received</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="responsesCount">0</span>
+                <div class="stat-label">Responses Sent</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load SDK and application -->
+    <script src="../../switchboard-client.js"></script>
+    <script src="teacher-app.js"></script>
+</body>
+</html>

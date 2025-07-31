@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Switchboard SDK Integration Test</title>
+    <script src="switchboard-client.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .client-panel { 
+            display: inline-block; 
+            width: 45%; 
+            margin: 2%; 
+            padding: 20px; 
+            border: 2px solid #ccc; 
+            border-radius: 10px;
+            vertical-align: top;
+        }
+        .student-panel { border-color: #4ecdc4; }
+        .teacher-panel { border-color: #ff6b35; }
+        .status { 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 5px; 
+            font-weight: bold;
+        }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .connecting { background: #fff3cd; color: #856404; }
+        .messages { 
+            height: 300px; 
+            overflow-y: auto; 
+            border: 1px solid #ddd; 
+            padding: 10px; 
+            margin: 10px 0;
+            background: #f9f9f9;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .message.system { background: #e7f3ff; }
+        .message.question { background: #f0fffe; }
+        .message.announcement { background: #fff5f5; }
+        .message.direct { background: #f5f5ff; }
+        .message.error { background: #ffe6e6; color: #d63031; }
+        .controls { margin: 10px 0; }
+        .controls input, .controls button { 
+            margin: 5px; 
+            padding: 8px 12px; 
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .controls button { 
+            background: #007bff; 
+            color: white; 
+            cursor: pointer;
+        }
+        .controls button:hover { background: #0056b3; }
+        .controls button:disabled { 
+            background: #6c757d; 
+            cursor: not-allowed;
+        }
+        .rate-limit {
+            font-size: 12px;
+            color: #666;
+            margin: 5px 0;
+        }
+        h2 { margin-top: 0; }
+        pre { 
+            background: #f4f4f4; 
+            padding: 10px; 
+            border-radius: 4px; 
+            overflow-x: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Switchboard SDK Integration Test</h1>
+        <p>This page demonstrates both student and teacher clients connecting to the same Switchboard server.</p>
+        
+        <!-- Student Panel -->
+        <div class="client-panel student-panel">
+            <h2>👨‍🎓 Student Client</h2>
+            
+            <div id="studentStatus" class="status disconnected">Disconnected</div>
+            
+            <div class="controls">
+                <button id="studentConnect" onclick="connectStudent()">Connect</button>
+                <button id="studentDisconnect" onclick="disconnectStudent()" disabled>Disconnect</button>
+            </div>
+            
+            <div class="controls">
+                <input type="text" id="studentQuestion" placeholder="Ask a question..." style="width: 60%;">
+                <button onclick="askQuestion()" id="askBtn" disabled>Ask</button>
+            </div>
+            
+            <div class="controls">
+                <input type="text" id="peerMessage" placeholder="Message to teacher..." style="width: 60%;">
+                <button onclick="messagePeer()" id="peerBtn" disabled>Send DM</button>
+            </div>
+            
+            <div id="studentRateLimit" class="rate-limit"></div>
+            
+            <div id="studentMessages" class="messages"></div>
+        </div>
+        
+        <!-- Teacher Panel -->
+        <div class="client-panel teacher-panel">
+            <h2>👩‍🏫 Teacher Client</h2>
+            
+            <div id="teacherStatus" class="status disconnected">Disconnected</div>
+            
+            <div class="controls">
+                <button id="teacherConnect" onclick="connectTeacher()">Connect</button>
+                <button id="teacherDisconnect" onclick="disconnectTeacher()" disabled>Disconnect</button>
+            </div>
+            
+            <div class="controls">
+                <input type="text" id="sessionName" placeholder="Session name..." value="SDK Integration Test">
+                <button onclick="startSession()" id="startBtn" disabled>Start Session</button>
+                <button onclick="endSession()" id="endBtn" disabled>End Session</button>
+            </div>
+            
+            <div class="controls">
+                <input type="text" id="announcement" placeholder="Announcement..." style="width: 60%;">
+                <button onclick="makeAnnouncement()" id="announceBtn" disabled>Announce</button>
+            </div>
+            
+            <div id="teacherRateLimit" class="rate-limit"></div>
+            
+            <div id="teacherMessages" class="messages"></div>
+        </div>
+        
+        <!-- Debug Info -->
+        <div style="clear: both; margin-top: 20px;">
+            <h3>Debug Information</h3>
+            <div style="display: flex; gap: 20px;">
+                <div style="flex: 1;">
+                    <h4>Connection Info</h4>
+                    <div id="debugInfo">
+                        <div>WebSocket URL: <code>ws://localhost:8080/ws</code></div>
+                        <div>API URL: <code>http://localhost:8080/api</code></div>
+                        <div>Protocol: Switchboard V4</div>
+                    </div>
+                </div>
+                <div style="flex: 1;">
+                    <h4>Test Instructions</h4>
+                    <ol>
+                        <li>Start the Switchboard server on localhost:8080</li>
+                        <li>Connect both student and teacher clients</li>
+                        <li>Start a session using the teacher client</li>
+                        <li>Send messages and observe real-time communication</li>
+                        <li>Test reconnection by refreshing the page</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let studentClient = null;
+        let teacherClient = null;
+        
+        // Update rate limit displays
+        function updateRateLimits() {
+            if (studentClient) {
+                const status = studentClient.getRateLimitStatus();
+                document.getElementById('studentRateLimit').textContent = 
+                    `Rate limit: ${status.messagesSent}/${status.maxMessages} messages this minute`;
+            }
+            
+            if (teacherClient) {
+                const status = teacherClient.getRateLimitStatus();
+                document.getElementById('teacherRateLimit').textContent = 
+                    `Rate limit: ${status.messagesSent}/${status.maxMessages} messages this minute`;
+            }
+        }
+        
+        // Update rate limits every second
+        setInterval(updateRateLimits, 1000);
+        
+        // Student client functions
+        function connectStudent() {
+            studentClient = new SwitchboardClient({
+                userId: 'test_student',
+                role: 'student',
+                wsUrl: 'ws://localhost:8080/ws',
+                debug: true,
+                hooks: {
+                    onConnecting: () => {
+                        updateStudentStatus('connecting', 'Connecting...');
+                    },
+                    
+                    onConnected: () => {
+                        updateStudentStatus('connected', 'Connected');
+                        document.getElementById('studentConnect').disabled = true;
+                        document.getElementById('studentDisconnect').disabled = false;
+                    },
+                    
+                    onDisconnected: (code, reason) => {
+                        updateStudentStatus('disconnected', `Disconnected: ${reason}`);
+                        document.getElementById('studentConnect').disabled = false;
+                        document.getElementById('studentDisconnect').disabled = true;
+                        disableStudentControls();
+                    },
+                    
+                    onReconnecting: (attempt, delay) => {
+                        updateStudentStatus('connecting', `Reconnecting... (attempt ${attempt})`);
+                    },
+                    
+                    onWaitingForSession: (message) => {
+                        addStudentMessage('system', '⏳ Waiting for class to start');
+                        disableStudentControls();
+                    },
+                    
+                    onSessionActive: (session, message) => {
+                        addStudentMessage('system', `📚 Joined class: ${session.name}`);
+                        enableStudentControls();
+                    },
+                    
+                    onSessionStarted: (session, message) => {
+                        addStudentMessage('system', `🎓 Class started: ${session.name}`);
+                        enableStudentControls();
+                    },
+                    
+                    onSessionEnded: (session, message) => {
+                        addStudentMessage('system', '📚 Class ended');
+                        disableStudentControls();
+                    },
+                    
+                    onHistoryDelivered: (message) => {
+                        addStudentMessage('system', '📋 Class history loaded');
+                    },
+                    
+                    onBroadcastToInstructors: (message) => {
+                        // Own question echoed back
+                        if (message.from_user === studentClient.userId) {
+                            addStudentMessage('question', `✅ Question sent: ${message.content.text}`);
+                        }
+                    },
+                    
+                    onDirectMessage: (message) => {
+                        if (message.from_user !== studentClient.userId) {
+                            addStudentMessage('direct', `💬 ${message.from_user}: ${message.content.text}`);
+                        }
+                    },
+                    
+                    onBroadcastToStudents: (message) => {
+                        const icon = message.content.important ? '📢' : '🔔';
+                        addStudentMessage('announcement', `${icon} ${message.content.text}`);
+                    },
+                    
+                    onError: (error) => {
+                        addStudentMessage('error', `❌ ${error.error}: ${error.message}`);
+                    },
+                    
+                    onConnectionError: (error) => {
+                        addStudentMessage('error', `🔌 Connection error: ${error.message}`);
+                    }
+                }
+            });
+            
+            studentClient.connect().catch(error => {
+                updateStudentStatus('disconnected', `Connection failed: ${error.message}`);
+            });
+        }
+        
+        function disconnectStudent() {
+            if (studentClient) {
+                studentClient.disconnect();
+                studentClient = null;
+            }
+        }
+        
+        function askQuestion() {
+            const input = document.getElementById('studentQuestion');
+            const question = input.value.trim();
+            
+            if (!question) return;
+            
+            try {
+                studentClient.broadcast_to_instructors('helpRequest')
+                    .withText(question)
+                    .send();
+                input.value = '';
+            } catch (error) {
+                addStudentMessage('error', `❌ ${error.message}`);
+            }
+        }
+        
+        function messagePeer() {
+            const input = document.getElementById('peerMessage');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            try {
+                studentClient.direct_message('test_teacher', 'message')
+                    .withText(message)
+                    .send();
+                input.value = '';
+                addStudentMessage('direct', `➡️ To teacher: ${message}`);
+            } catch (error) {
+                addStudentMessage('error', `❌ ${error.message}`);
+            }
+        }
+        
+        function updateStudentStatus(state, text) {
+            const status = document.getElementById('studentStatus');
+            status.textContent = text;
+            status.className = `status ${state}`;
+        }
+        
+        function addStudentMessage(type, text) {
+            const messages = document.getElementById('studentMessages');
+            const div = document.createElement('div');
+            div.className = `message ${type}`;
+            div.innerHTML = `
+                <div>${text}</div>
+                <small style="color: #666; font-size: 11px;">${new Date().toLocaleTimeString()}</small>
+            `;
+            messages.appendChild(div);
+            messages.scrollTop = messages.scrollHeight;
+        }
+        
+        function enableStudentControls() {
+            document.getElementById('askBtn').disabled = false;
+            document.getElementById('peerBtn').disabled = false;
+        }
+        
+        function disableStudentControls() {
+            document.getElementById('askBtn').disabled = true;
+            document.getElementById('peerBtn').disabled = true;
+        }
+        
+        // Teacher client functions
+        function connectTeacher() {
+            teacherClient = new SwitchboardClient({
+                userId: 'test_teacher',
+                role: 'instructor',
+                wsUrl: 'ws://localhost:8080/ws',
+                debug: true,
+                hooks: {
+                    onConnecting: () => {
+                        updateTeacherStatus('connecting', 'Connecting...');
+                    },
+                    
+                    onConnected: () => {
+                        updateTeacherStatus('connected', 'Connected');
+                        document.getElementById('teacherConnect').disabled = true;
+                        document.getElementById('teacherDisconnect').disabled = false;
+                        enableTeacherControls();
+                    },
+                    
+                    onDisconnected: (code, reason) => {
+                        updateTeacherStatus('disconnected', `Disconnected: ${reason}`);
+                        document.getElementById('teacherConnect').disabled = false;
+                        document.getElementById('teacherDisconnect').disabled = true;
+                        disableTeacherControls();
+                    },
+                    
+                    onReconnecting: (attempt, delay) => {
+                        updateTeacherStatus('connecting', `Reconnecting... (attempt ${attempt})`);
+                    },
+                    
+                    onWaitingForSession: (message) => {
+                        addTeacherMessage('system', '⏳ Ready to start class');
+                    },
+                    
+                    onSessionActive: (session, message) => {
+                        addTeacherMessage('system', `📚 Teaching: ${session.name}`);
+                    },
+                    
+                    onSessionStarted: (session, message) => {
+                        addTeacherMessage('system', `🎓 Started class: ${session.name}`);
+                    },
+                    
+                    onSessionEnded: (session, message) => {
+                        addTeacherMessage('system', '📚 Class ended');
+                    },
+                    
+                    onHistoryDelivered: (message) => {
+                        addTeacherMessage('system', '📋 Class history loaded');
+                    },
+                    
+                    onBroadcastToInstructors: (message) => {
+                        // Student questions
+                        addTeacherMessage('question', `❓ ${message.from_user}: ${message.content.text}`, message);
+                    },
+                    
+                    onDirectMessage: (message) => {
+                        if (message.from_user !== teacherClient.userId) {
+                            addTeacherMessage('direct', `💬 ${message.from_user}: ${message.content.text}`);
+                        }
+                    },
+                    
+                    onBroadcastToStudents: (message) => {
+                        // Own announcements echoed back
+                        if (message.from_user === teacherClient.userId) {
+                            const icon = message.content.important ? '📢' : '🔔';
+                            addTeacherMessage('announcement', `${icon} Announced: ${message.content.text}`);
+                        }
+                    },
+                    
+                    onError: (error) => {
+                        addTeacherMessage('error', `❌ ${error.error}: ${error.message}`);
+                    },
+                    
+                    onConnectionError: (error) => {
+                        addTeacherMessage('error', `🔌 Connection error: ${error.message}`);
+                    }
+                }
+            });
+            
+            teacherClient.connect().catch(error => {
+                updateTeacherStatus('disconnected', `Connection failed: ${error.message}`);
+            });
+        }
+        
+        function disconnectTeacher() {
+            if (teacherClient) {
+                teacherClient.disconnect();
+                teacherClient = null;
+            }
+        }
+        
+        async function startSession() {
+            const name = document.getElementById('sessionName').value.trim();
+            if (!name) return;
+            
+            try {
+                const session = await teacherClient.startSession(name);
+                addTeacherMessage('system', `✅ Session started: ${session.session.name}`);
+            } catch (error) {
+                addTeacherMessage('error', `❌ Failed to start session: ${error.message}`);
+            }
+        }
+        
+        async function endSession() {
+            try {
+                const result = await teacherClient.endSession();
+                addTeacherMessage('system', `✅ Session ended`);
+            } catch (error) {
+                addTeacherMessage('error', `❌ Failed to end session: ${error.message}`);
+            }
+        }
+        
+        function makeAnnouncement() {
+            const input = document.getElementById('announcement');
+            const text = input.value.trim();
+            
+            if (!text) return;
+            
+            try {
+                const announcement = teacherClient.broadcast_to_students('announcement')
+                    .withText(text);
+                
+                if (text.includes('!')) {
+                    announcement.markAsImportant();
+                }
+                
+                announcement.send();
+                input.value = '';
+            } catch (error) {
+                addTeacherMessage('error', `❌ ${error.message}`);
+            }
+        }
+        
+        function updateTeacherStatus(state, text) {
+            const status = document.getElementById('teacherStatus');
+            status.textContent = text;
+            status.className = `status ${state}`;
+        }
+        
+        function addTeacherMessage(type, text, data = null) {
+            const messages = document.getElementById('teacherMessages');
+            const div = document.createElement('div');
+            div.className = `message ${type}`;
+            
+            let content = `<div>${text}</div>`;
+            
+            // Add respond button for student questions
+            if (type === 'question' && data) {
+                content += `<button onclick="respondToStudent('${data.from_user}', '${data.id}')" style="margin-top: 5px; padding: 3px 6px; font-size: 12px;">Respond</button>`;
+            }
+            
+            content += `<small style="color: #666; font-size: 11px; display: block; margin-top: 3px;">${new Date().toLocaleTimeString()}</small>`;
+            
+            div.innerHTML = content;
+            messages.appendChild(div);
+            messages.scrollTop = messages.scrollHeight;
+        }
+        
+        function respondToStudent(studentId, messageId) {
+            const response = prompt(`Respond to ${studentId}:`);
+            if (response) {
+                try {
+                    teacherClient.direct_message(studentId, 'response')
+                        .withText(response)
+                        .referencingMessage(messageId)
+                        .send();
+                    addTeacherMessage('direct', `➡️ To ${studentId}: ${response}`);
+                } catch (error) {
+                    addTeacherMessage('error', `❌ ${error.message}`);
+                }
+            }
+        }
+        
+        function enableTeacherControls() {
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('endBtn').disabled = false;
+            document.getElementById('announceBtn').disabled = false;
+        }
+        
+        function disableTeacherControls() {
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('endBtn').disabled = true;
+            document.getElementById('announceBtn').disabled = true;
+        }
+        
+        // Enter key handlers
+        document.getElementById('studentQuestion').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') askQuestion();
+        });
+        
+        document.getElementById('peerMessage').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') messagePeer();
+        });
+        
+        document.getElementById('announcement').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') makeAnnouncement();
+        });
+        
+        // Auto-connect on page load (optional - comment out for manual testing)
+        // setTimeout(() => {
+        //     connectStudent();
+        //     connectTeacher();
+        // }, 1000);
+    </script>
+</body>
+</html>
