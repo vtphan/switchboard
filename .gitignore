@@ -1,0 +1,44 @@
+# Claude AI assistant files
+CLAUDE.md
+.claude/
+
+# Planning and temporary files
+planning/
+
+# Build artifacts
+bin/
+*.test
+main
+server
+
+# Database files (development)
+*.db
+*.db-shm  
+*.db-wal
+
+# Logs
+*.log
+
+# Coverage reports
+*.out
+*.html
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
