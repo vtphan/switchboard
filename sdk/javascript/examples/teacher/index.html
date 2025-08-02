@@ -1,107 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Switchboard Teacher Client</title>
-    <link rel="stylesheet" href="../shared-styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Switchboard Teacher App V2</title>
+  <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <div id="app">
     <div class="container">
-        <!-- Header -->
-        <div class="header teacher-header">
-            <h1>🎓 Teacher Client</h1>
-            <p>Manage sessions, respond to questions, and broadcast to students</p>
+      <h1>Switchboard Teacher App V2</h1>
+      <p class="subtitle">Session management and simplified messaging demo</p>
+      
+      <div class="status-section">
+        <div class="status-item">
+          <label>Connection:</label>
+          <span id="connectionStatus" class="status disconnected">Disconnected</span>
         </div>
-
-        <!-- Connection Status -->
-        <div class="status" id="status">
-            <div class="status-dot" id="statusDot"></div>
-            <div>
-                <div class="status-text" id="statusText">Disconnected</div>
-                <div class="session-info" id="sessionInfo">No active session</div>
-                <div class="session-details" id="sessionDetails" style="display: none;"></div>
-            </div>
+        <div class="status-item">
+          <label>Session:</label>
+          <span id="sessionStatus" class="status inactive">No session</span>
         </div>
-
-        <!-- Connection Controls -->
-        <div class="controls">
-            <h3>Connection</h3>
-            <div class="input-group">
-                <input type="text" id="teacherId" placeholder="Your teacher ID" value="prof_smith">
-                <button id="connectBtn" class="primary">Connect</button>
-                <button id="disconnectBtn" class="secondary" disabled>Disconnect</button>
-            </div>
+      </div>
+      
+      <div class="controls">
+        <button id="connectBtn" class="btn primary">Connect</button>
+        <button id="disconnectBtn" class="btn secondary" disabled>Disconnect</button>
+      </div>
+      
+      <div class="session-section">
+        <h3>Session Management</h3>
+        <div class="input-group">
+          <input type="text" id="sessionNameInput" placeholder="Enter session name..." value="Math Class Demo">
+          <div style="display: flex; gap: 0.5rem;">
+            <button id="startSessionBtn" class="btn primary" disabled>Start Session</button>
+            <button id="endSessionBtn" class="btn danger" disabled>End Session</button>
+          </div>
         </div>
-
-        <!-- Session Management -->
-        <div class="controls">
-            <h3>Session Management</h3>
-            <div class="input-group" id="startSessionGroup">
-                <input type="text" id="sessionName" placeholder="Session name..." value="Introduction to JavaScript">
-                <button id="startSessionBtn" class="success" disabled>Start Session</button>
-            </div>
-            <div class="input-group" id="endSessionGroup" style="display: none;">
-                <div id="activeSessionInfo" style="flex: 1; padding: 12px; background: #f0fff4; border: 1px solid #48bb78; border-radius: 6px; color: #2f855a;">
-                    <strong>Active Session:</strong> <span id="activeSessionName"></span><br>
-                    <small>Session ID: <span id="activeSessionId"></span></small>
-                </div>
-                <button id="endSessionBtn" class="danger">End Session</button>
-            </div>
+      </div>
+      
+      <div class="messaging-section">
+        <h3>Send Announcement</h3>
+        <div class="input-group">
+          <textarea id="announcementInput" placeholder="Type your announcement here..." rows="3"></textarea>
+          <div class="message-options">
+            <label>
+              <input type="checkbox" id="importantCheck"> Mark as important
+            </label>
+            <select id="announcementContextSelect">
+              <option value="announcement">Announcement</option>
+              <option value="instruction">Instruction</option>
+              <option value="emergency">Emergency</option>
+              <option value="general">General</option>
+            </select>
+            <input type="text" id="tagsInput" placeholder="Tags (comma-separated)">
+          </div>
+          <div>
+            <button id="announceBtn" class="btn primary" disabled>Send Announcement</button>
+          </div>
         </div>
-
-        <!-- Broadcast Announcement -->
-        <div class="controls">
-            <h3>Send Announcement</h3>
-            <div class="input-group">
-                <textarea id="announcementText" placeholder="Announcement to all students..." rows="3"></textarea>
-            </div>
-            <div class="input-group">
-                <button id="announceBtn" class="primary" disabled>Send Announcement</button>
-                <button id="importantBtn" class="danger" disabled>Send as Important</button>
-            </div>
+      </div>
+      
+      <div class="questions-section">
+        <h3>Student Questions</h3>
+        <div id="questionsList" class="messages-list"></div>
+      </div>
+      
+      <div class="demo-section">
+        <h3>V2 Protocol Compliance Demo</h3>
+        <p>This demo shows the fixed context field handling:</p>
+        <div id="protocolDemo" class="protocol-demo">
+          <p>Send a message to see the protocol structure...</p>
         </div>
-
-        <!-- Messages from Students -->
-        <div class="messages-section">
-            <div class="messages-header">
-                💬 Student Messages & Questions
-            </div>
-            <div class="messages" id="messages"></div>
-        </div>
-
-        <!-- Quick Response -->
-        <div class="controls">
-            <h3>Quick Response</h3>
-            <div class="input-group">
-                <input type="text" id="responseToStudent" placeholder="Student ID to respond to..." readonly>
-                <textarea id="responseText" placeholder="Your response..." rows="2"></textarea>
-            </div>
-            <div class="input-group">
-                <button id="responseBtn" class="success" disabled>Send Response</button>
-                <button id="clearResponseBtn" class="secondary">Clear</button>
-            </div>
-        </div>
-
-        <!-- Stats -->
-        <div class="stats">
-            <div class="stat-card">
-                <span class="stat-number" id="studentsCount">0</span>
-                <div class="stat-label">Active Students</div>
-            </div>
-            <div class="stat-card">
-                <span class="stat-number" id="questionsCount">0</span>
-                <div class="stat-label">Questions Received</div>
-            </div>
-            <div class="stat-card">
-                <span class="stat-number" id="responsesCount">0</span>
-                <div class="stat-label">Responses Sent</div>
-            </div>
-        </div>
+      </div>
     </div>
+  </div>
 
-    <!-- Load SDK and application -->
-    <script src="../../switchboard-client.js"></script>
-    <script src="teacher-app.js"></script>
+  <script type="module" src="teacher-app.js"></script>
 </body>
 </html>

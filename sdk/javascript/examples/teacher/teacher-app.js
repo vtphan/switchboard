@@ -1,520 +1,296 @@
 /**
- * Switchboard Teacher Client Application
- * Demonstrates SDK integration for instructor users
+ * Teacher App using SwitchboardClient V2
+ * 
+ * Demonstrates instructor session management and the simplified message sending API.
  */
 
-class TeacherApp {
-    constructor() {
-        this.client = null;
-        this.isConnected = false;
-        this.activeSession = null;
-        this.questionsReceived = 0;
-        this.responsesSent = 0;
-        this.activeStudents = new Set();
-        this.selectedStudent = null; // For quick response
-        
-        // DOM elements
-        this.elements = {
-            teacherId: document.getElementById('teacherId'),
-            connectBtn: document.getElementById('connectBtn'),
-            disconnectBtn: document.getElementById('disconnectBtn'),
-            statusDot: document.getElementById('statusDot'),
-            statusText: document.getElementById('statusText'),
-            sessionInfo: document.getElementById('sessionInfo'),
-            sessionDetails: document.getElementById('sessionDetails'),
-            sessionName: document.getElementById('sessionName'),
-            startSessionBtn: document.getElementById('startSessionBtn'),
-            endSessionBtn: document.getElementById('endSessionBtn'),
-            startSessionGroup: document.getElementById('startSessionGroup'),
-            endSessionGroup: document.getElementById('endSessionGroup'),
-            activeSessionName: document.getElementById('activeSessionName'),
-            activeSessionId: document.getElementById('activeSessionId'),
-            announcementText: document.getElementById('announcementText'),
-            announceBtn: document.getElementById('announceBtn'),
-            importantBtn: document.getElementById('importantBtn'),
-            messages: document.getElementById('messages'),
-            responseToStudent: document.getElementById('responseToStudent'),
-            responseText: document.getElementById('responseText'),
-            responseBtn: document.getElementById('responseBtn'),
-            clearResponseBtn: document.getElementById('clearResponseBtn'),
-            studentsCount: document.getElementById('studentsCount'),
-            questionsCount: document.getElementById('questionsCount'),
-            responsesCount: document.getElementById('responsesCount')
-        };
-        
-        this.setupEventListeners();
+import SwitchboardClient from '../../switchboard-client.js';
+
+class TeacherAppV2 {
+  constructor() {
+    this.client = null;
+    this.setupUI();
+    this.initializeClient();
+  }
+  
+  setupUI() {
+    // Bind event handlers to existing HTML elements
+    document.getElementById('connectBtn').onclick = () => this.connect();
+    document.getElementById('disconnectBtn').onclick = () => this.disconnect();
+    document.getElementById('startSessionBtn').onclick = () => this.startSession();
+    document.getElementById('endSessionBtn').onclick = () => this.endSession();
+    document.getElementById('announceBtn').onclick = () => this.sendAnnouncement();
+    
+    // Update button states on input
+    document.getElementById('announcementInput').oninput = () => this.updateSendButton();
+    document.getElementById('sessionNameInput').oninput = () => this.updateSessionButtons();
+  }
+  
+  initializeClient() {
+    this.client = new SwitchboardClient({
+      userId: 'instructor-' + Math.random().toString(36).substr(2, 9),
+      role: 'instructor',
+      wsUrl: 'ws://localhost:8080/ws',
+      apiUrl: 'http://localhost:8080/api',
+      
+      // 4 message type hooks
+      onBroadcastToInstructors: (message) => this.handleStudentQuestion(message),
+      onDirectMessage: (message) => this.handleDirectMessage(message),
+      onSystem: (message) => this.handleSystemMessage(message),
+      
+      // 2 state change hooks
+      onConnectionChange: (state, error) => this.handleConnectionChange(state, error),
+      onSessionChange: (session) => this.handleSessionChange(session)
+    });
+    
+    console.log('Teacher client initialized with V2 API');
+  }
+  
+  // Event handlers for the 6 hooks
+  handleStudentQuestion(message) {
+    console.log('Received student question:', message);
+    this.addQuestion({
+      id: Date.now(),
+      text: message.content.text,
+      context: message.context,
+      urgent: message.content.urgent,
+      studentId: message.content.student_id || message.from_user || 'Unknown',
+      timestamp: new Date().toLocaleTimeString()
+    });
+  }
+  
+  handleDirectMessage(message) {
+    console.log('Received direct message:', message);
+    // Handle direct messages if needed
+  }
+  
+  handleSystemMessage(message) {
+    console.log('System message:', message);
+    // System messages handled internally
+  }
+  
+  handleConnectionChange(state, error) {
+    console.log('Connection state changed:', state, error);
+    
+    const statusEl = document.getElementById('connectionStatus');
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    
+    statusEl.className = `status ${state}`;
+    statusEl.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+    
+    switch (state) {
+      case 'connecting':
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = true;
+        break;
+      case 'connected':
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+        this.updateSessionButtons();
+        this.updateSendButton();
+        break;
+      case 'disconnected':
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+        this.disableAllControls();
+        break;
+      case 'error':
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+        this.disableAllControls();
+        break;
     }
-
-    setupEventListeners() {
-        this.elements.connectBtn.addEventListener('click', () => this.connect());
-        this.elements.disconnectBtn.addEventListener('click', () => this.disconnect());
-        this.elements.startSessionBtn.addEventListener('click', () => this.startSession());
-        this.elements.endSessionBtn.addEventListener('click', () => this.endSession());
-        this.elements.announceBtn.addEventListener('click', () => this.sendAnnouncement());
-        this.elements.importantBtn.addEventListener('click', () => this.sendAnnouncement(true));
-        this.elements.responseBtn.addEventListener('click', () => this.sendResponse());
-        this.elements.clearResponseBtn.addEventListener('click', () => this.clearResponse());
-        
-        // Allow Enter to submit announcement
-        this.elements.announcementText.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                this.sendAnnouncement();
-            }
-        });
-        
-        // Allow Enter to submit response
-        this.elements.responseText.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                this.sendResponse();
-            }
-        });
+  }
+  
+  handleSessionChange(session) {
+    console.log('Session state changed:', session);
+    
+    const statusEl = document.getElementById('sessionStatus');
+    const startBtn = document.getElementById('startSessionBtn');
+    const endBtn = document.getElementById('endSessionBtn');
+    
+    if (session.active) {
+      statusEl.className = 'status active';
+      statusEl.textContent = `Active: ${session.name}`;
+      startBtn.disabled = true;
+      endBtn.disabled = false;
+    } else {
+      statusEl.className = 'status inactive';
+      statusEl.textContent = 'No session';
+      endBtn.disabled = true;
+      this.updateSessionButtons();
     }
-
-    async connect() {
-        const teacherId = this.elements.teacherId.value.trim();
-        if (!teacherId) {
-            alert('Please enter a teacher ID');
-            return;
-        }
-
-        try {
-            console.log('Creating SwitchboardClient with userId:', teacherId);
-            // Initialize Switchboard client with instructor-focused hooks
-            this.client = new SwitchboardClient({
-                userId: teacherId,
-                role: 'instructor',
-                wsUrl: 'ws://localhost:8080/ws',
-                debug: true, // Enable debug logging
-                hooks: {
-                    // Connection events
-                    onConnecting: () => {
-                        this.updateStatus('connecting', 'Connecting...');
-                        this.elements.connectBtn.disabled = true;
-                    },
-                    
-                    onConnected: () => {
-                        this.isConnected = true;
-                        this.updateStatus('connected', 'Connected');
-                        this.elements.connectBtn.disabled = true;
-                        this.elements.disconnectBtn.disabled = false;
-                        this.elements.startSessionBtn.disabled = false;
-                        this.elements.announceBtn.disabled = false;
-                        this.elements.importantBtn.disabled = false;
-                        this.addSystemMessage('✅ Connected to Switchboard');
-                    },
-                    
-                    onDisconnected: (code, reason) => {
-                        this.isConnected = false;
-                        this.updateStatus('disconnected', 'Disconnected');
-                        this.elements.connectBtn.disabled = false;
-                        this.elements.disconnectBtn.disabled = true;
-                        this.disableSessionControls();
-                        this.addSystemMessage(`❌ Disconnected (${reason || 'Unknown reason'})`);
-                    },
-                    
-                    onReconnecting: (attempt, delay) => {
-                        this.updateStatus('connecting', `Reconnecting... (attempt ${attempt})`);
-                        this.addSystemMessage(`🔄 Reconnecting in ${delay}ms (attempt ${attempt})`);
-                    },
-                    
-                    onConnectionError: (error) => {
-                        this.addErrorMessage(`Connection error: ${error.message || 'Unknown error'}`);
-                    },
-
-                    // Message events - critical for teachers
-                    onBroadcastToInstructors: (message) => {
-                        this.questionsReceived++;
-                        this.activeStudents.add(message.from_user);
-                        this.updateStats();
-                        
-                        // Handle different types of student messages
-                        if (message.content?.name === 'helpRequest') {
-                            this.addStudentQuestion(message);
-                        } else if (message.content?.name === 'codeSnapshot') {
-                            this.addStudentCodeUpdate(message);
-                        } else {
-                            this.addStudentMessage(message);
-                        }
-                    },
-                    
-                    onDirectMessage: (message) => {
-                        this.addDirectMessage(message);
-                    },
-                    
-                    onMessage: (message) => {
-                        // Log all messages for debugging
-                        console.log('Received message:', message);
-                    },
-
-                    // Session events - essential for instructors
-                    onSessionStarted: (session) => {
-                        console.log('onSessionStarted hook called with:', session);
-                        this.activeSession = session;
-                        this.updateSessionUI(session);
-                        this.addSystemMessage(`🎓 Session started: ${session.name}`);
-                    },
-                    
-                    onSessionEnded: (session) => {
-                        this.activeSession = null;
-                        this.updateSessionUI(null);
-                        this.addSystemMessage(`📚 Session ended: ${session.name}`);
-                    },
-                    
-                    onWaitingForSession: () => {
-                        this.elements.sessionInfo.textContent = 'Ready to start session';
-                    },
-                    
-                    onSessionActive: (session) => {
-                        this.activeSession = session;
-                        this.updateSessionUI(session);
-                        this.addSystemMessage(`🎓 Joined active session: ${session.name}`);
-                    },
-                    
-                    onHistoryDelivered: () => {
-                        this.addSystemMessage('📋 Message history loaded');
-                    },
-
-                    // Error handling
-                    onError: (error) => {
-                        this.addErrorMessage(`Error: ${error.message || 'Unknown error'}`);
-                    },
-                    
-                    onRateLimited: (error) => {
-                        this.addErrorMessage('⚠️ Sending messages too quickly. Please slow down.');
-                    },
-                    
-                    onNoActiveSession: (error) => {
-                        this.addErrorMessage('⚠️ Please start a session before sending messages.');
-                    },
-                    
-                    onMessageTooLarge: (error) => {
-                        this.addErrorMessage('⚠️ Message is too large. Please shorten your message.');
-                    }
-                }
-            });
-
-            console.log('Attempting to connect...');
-            await this.client.connect();
-            console.log('Connection attempt completed');
-            
-        } catch (error) {
-            this.addErrorMessage(`Failed to connect: ${error.message}`);
-            this.elements.connectBtn.disabled = false;
-        }
+    
+    this.updateSendButton();
+  }
+  
+  // UI methods
+  async connect() {
+    try {
+      console.log('Connecting with V2 client...');
+      await this.client.connect();
+      console.log('Connected successfully!');
+    } catch (error) {
+      console.error('Connection failed:', error);
     }
-
-    disconnect() {
-        if (this.client) {
-            this.client.disconnect();
-            this.client = null;
-        }
+  }
+  
+  disconnect() {
+    console.log('Disconnecting...');
+    this.client.disconnect();
+  }
+  
+  async startSession() {
+    const sessionName = document.getElementById('sessionNameInput').value.trim();
+    if (!sessionName) return;
+    
+    try {
+      console.log('Starting session:', sessionName);
+      const result = await this.client.startSession(sessionName);
+      console.log('Session started:', result);
+    } catch (error) {
+      console.error('Failed to start session:', error);
+      alert(`Failed to start session: ${error.message}`);
     }
-
-    async startSession() {
-        if (!this.client || !this.isConnected) {
-            alert('Please connect first');
-            return;
-        }
-
-        const sessionName = this.elements.sessionName.value.trim();
-        if (!sessionName) {
-            alert('Please enter a session name');
-            return;
-        }
-
-        try {
-            console.log('Attempting to start session:', sessionName);
-            const result = await this.client.startSession(sessionName);
-            console.log('Session start result:', result);
-            
-            // Manually update UI since WebSocket notification might not come
-            if (result && result.id) {
-                console.log('Manually updating session UI');
-                this.activeSession = result;
-                this.updateSessionUI(result);
-                this.addSystemMessage(`🎓 Session started: ${result.name}`);
-            }
-        } catch (error) {
-            if (error.message.includes('409') || error.message.includes('already active')) {
-                this.addErrorMessage('⚠️ A session is already active. Please end the current session first or refresh the page.');
-            } else {
-                this.addErrorMessage(`Failed to start session: ${error.message}`);
-            }
-        }
+  }
+  
+  async endSession() {
+    try {
+      console.log('Ending session...');
+      const result = await this.client.endSession();
+      console.log('Session ended:', result);
+    } catch (error) {
+      console.error('Failed to end session:', error);
+      alert(`Failed to end session: ${error.message}`);
     }
-
-    async endSession() {
-        if (!this.client || !this.activeSession) {
-            return;
-        }
-
-        try {
-            console.log('Attempting to end session');
-            const result = await this.client.endSession();
-            console.log('Session end result:', result);
-            
-            // Manually update UI since WebSocket notification might not come
-            const endedSession = this.activeSession;
-            this.activeSession = null;
-            this.updateSessionUI(null);
-            this.addSystemMessage(`📚 Session ended: ${endedSession.name}`);
-        } catch (error) {
-            this.addErrorMessage(`Failed to end session: ${error.message}`);
-        }
+  }
+  
+  sendAnnouncement() {
+    const announcementText = document.getElementById('announcementInput').value.trim();
+    const context = document.getElementById('announcementContextSelect').value;
+    const important = document.getElementById('importantCheck').checked;
+    const tagsText = document.getElementById('tagsInput').value.trim();
+    
+    if (!announcementText) return;
+    
+    try {
+      // Build message object with all properties
+      const messageContent = {
+        text: announcementText,
+        context: context,
+        important: important,
+        instructor_id: this.client.userId,
+        timestamp: new Date().toISOString()
+      };
+      
+      // Add tags if provided
+      if (tagsText) {
+        messageContent.tags = tagsText.split(',').map(tag => tag.trim()).filter(tag => tag);
+      }
+      
+      // Use the new simplified message sending API
+      const message = this.client.broadcastToStudents(messageContent);
+      
+      console.log('Announcement sent with V2 API:', message);
+      
+      // Show protocol structure in demo section
+      this.showProtocolDemo(message);
+      
+      // Clear inputs
+      document.getElementById('announcementInput').value = '';
+      document.getElementById('importantCheck').checked = false;
+      document.getElementById('tagsInput').value = '';
+      this.updateSendButton();
+      
+    } catch (error) {
+      console.error('Failed to send announcement:', error);
+      alert(`Failed to send announcement: ${error.message}`);
     }
-
-    async sendAnnouncement(important = false) {
-        if (!this.client || !this.isConnected) {
-            alert('Please connect first');
-            return;
-        }
-
-        const text = this.elements.announcementText.value.trim();
-        if (!text) {
-            alert('Please enter an announcement');
-            return;
-        }
-
-        try {
-            let messageBuilder = this.client.broadcast_to_students('announcement')
-                .withText(text)
-                .withData({
-                    teacherId: this.elements.teacherId.value,
-                    timestamp: new Date().toISOString()
-                });
-
-            if (important) {
-                messageBuilder = messageBuilder.markAsImportant();
-            }
-
-            await messageBuilder.send();
-
-            // Update UI
-            this.elements.announcementText.value = '';
-            this.addOwnMessage({
-                type: 'announcement',
-                content: { text, important },
-                timestamp: new Date().toISOString()
-            });
-
-        } catch (error) {
-            this.addErrorMessage(`Failed to send announcement: ${error.message}`);
-        }
+  }
+  
+  showProtocolDemo(message) {
+    const demoEl = document.getElementById('protocolDemo');
+    demoEl.innerHTML = `
+      <h4>Last Sent Message Protocol Structure:</h4>
+      <pre class="protocol-structure">${JSON.stringify(message, null, 2)}</pre>
+      <div class="protocol-analysis">
+        <p><strong>✅ Protocol Compliance Verified:</strong></p>
+        <ul>
+          <li>Context field: <code>${message.context}</code> (separate field)</li>
+          <li>Content keys: <code>${Object.keys(message.content).join(', ')}</code></li>
+          <li>Context in content: ${message.content.context === undefined ? '✅ No (correct)' : '❌ Yes (double-nested!)'}</li>
+        </ul>
+      </div>
+    `;
+  }
+  
+  updateSessionButtons() {
+    const startBtn = document.getElementById('startSessionBtn');
+    const sessionName = document.getElementById('sessionNameInput').value.trim();
+    
+    startBtn.disabled = !(
+      this.client.isConnected() &&
+      !this.client.isSessionActive() &&
+      sessionName.length > 0
+    );
+  }
+  
+  updateSendButton() {
+    const announceBtn = document.getElementById('announceBtn');
+    const announcementText = document.getElementById('announcementInput').value.trim();
+    
+    const canSend = (
+      announcementText.length > 0 &&
+      this.client.isConnected() &&
+      this.client.isSessionActive()
+    );
+    
+    announceBtn.disabled = !canSend;
+    
+    if (!this.client.isConnected()) {
+      announceBtn.textContent = 'Connect First';
+    } else if (!this.client.isSessionActive()) {
+      announceBtn.textContent = 'Start Session First';
+    } else {
+      announceBtn.textContent = 'Send Announcement';
     }
-
-    async sendResponse() {
-        if (!this.client || !this.isConnected || !this.selectedStudent) {
-            alert('Please select a student to respond to');
-            return;
-        }
-
-        const responseText = this.elements.responseText.value.trim();
-        if (!responseText) {
-            alert('Please enter a response');
-            return;
-        }
-
-        try {
-            await this.client.direct_message(this.selectedStudent, 'response')
-                .withText(responseText)
-                .withData({
-                    teacherId: this.elements.teacherId.value,
-                    timestamp: new Date().toISOString(),
-                    responseType: 'direct'
-                })
-                .send();
-
-            // Update UI
-            this.responsesSent++;
-            this.updateStats();
-            this.clearResponse();
-            
-            this.addOwnMessage({
-                type: 'response',
-                content: { text: `Response to ${this.selectedStudent}: ${responseText}` },
-                timestamp: new Date().toISOString()
-            });
-
-        } catch (error) {
-            this.addErrorMessage(`Failed to send response: ${error.message}`);
-        }
-    }
-
-    clearResponse() {
-        this.selectedStudent = null;
-        this.elements.responseToStudent.value = '';
-        this.elements.responseText.value = '';
-        this.elements.responseBtn.disabled = true;
-    }
-
-    selectStudentForResponse(studentId) {
-        this.selectedStudent = studentId;
-        this.elements.responseToStudent.value = studentId;
-        this.elements.responseBtn.disabled = false;
-        this.elements.responseText.focus();
-    }
-
-    updateSessionUI(session) {
-        console.log('updateSessionUI called with:', session);
-        console.log('DOM elements check:', {
-            startSessionGroup: !!this.elements.startSessionGroup,
-            endSessionGroup: !!this.elements.endSessionGroup,
-            activeSessionName: !!this.elements.activeSessionName,
-            activeSessionId: !!this.elements.activeSessionId
-        });
-        
-        if (session) {
-            // Session is active
-            this.elements.sessionInfo.textContent = `📚 Active Session: ${session.name}`;
-            this.elements.sessionDetails.textContent = `Session ID: ${session.id || 'Unknown'}`;
-            this.elements.sessionDetails.style.display = 'block';
-            
-            // Show session details in the management area
-            this.elements.activeSessionName.textContent = session.name;
-            this.elements.activeSessionId.textContent = session.id || 'Unknown';
-            
-            // Switch to end session UI
-            this.elements.startSessionGroup.style.display = 'none';
-            this.elements.endSessionGroup.style.display = 'flex';
-        } else {
-            // No active session
-            this.elements.sessionInfo.textContent = 'No active session';
-            this.elements.sessionDetails.style.display = 'none';
-            
-            // Switch to start session UI
-            this.elements.startSessionGroup.style.display = 'flex';
-            this.elements.endSessionGroup.style.display = 'none';
-            this.elements.startSessionBtn.disabled = !this.isConnected;
-        }
-    }
-
-    disableSessionControls() {
-        this.elements.startSessionBtn.disabled = true;
-        this.elements.endSessionBtn.disabled = true;
-        this.elements.announceBtn.disabled = true;
-        this.elements.importantBtn.disabled = true;
-        
-        // Reset to start session UI when disconnected
-        this.updateSessionUI(null);
-    }
-
-    // UI Update methods
-    updateStatus(state, text) {
-        this.elements.statusDot.className = `status-dot ${state}`;
-        this.elements.statusText.textContent = text;
-    }
-
-    updateStats() {
-        this.elements.studentsCount.textContent = this.activeStudents.size;
-        this.elements.questionsCount.textContent = this.questionsReceived;
-        this.elements.responsesCount.textContent = this.responsesSent;
-    }
-
-    // Message display methods
-    addSystemMessage(text) {
-        this.addMessage({
-            type: 'system',
-            content: { text },
-            timestamp: new Date().toISOString()
-        });
-    }
-
-    addErrorMessage(text) {
-        this.addMessage({
-            type: 'error',
-            content: { text },
-            timestamp: new Date().toISOString()
-        });
-    }
-
-    addStudentQuestion(message) {
-        this.addMessage(message, 'question', true);
-    }
-
-    addStudentCodeUpdate(message) {
-        this.addMessage(message, 'other');
-    }
-
-    addStudentMessage(message) {
-        this.addMessage(message, 'other');
-    }
-
-    addDirectMessage(message) {
-        this.addMessage(message, 'other');
-    }
-
-    addOwnMessage(message) {
-        this.addMessage(message, 'own');
-    }
-
-    addMessage(message, messageClass = null, isClickable = false) {
-        const messageEl = document.createElement('div');
-        
-        // Determine message class
-        if (!messageClass) {
-            if (message.type === 'system') messageClass = 'system';
-            else if (message.type === 'error') messageClass = 'error';
-            else messageClass = 'other';
-        }
-        
-        messageEl.className = `message ${messageClass}`;
-
-        // Make question messages clickable for quick response
-        if (isClickable && message.from_user) {
-            messageEl.style.cursor = 'pointer';
-            messageEl.title = 'Click to respond to this student';
-            messageEl.addEventListener('click', () => {
-                this.selectStudentForResponse(message.from_user);
-            });
-        }
-
-        // Format timestamp
-        const timestamp = new Date(message.timestamp);
-        const timeStr = timestamp.toLocaleTimeString();
-
-        // Build message content
-        let content = '';
-        
-        if (message.type === 'system' || message.type === 'error') {
-            content = `<div class="message-body">${message.content.text}</div>`;
-        } else {
-            const sender = message.from_user || 'You';
-            const text = message.content?.text || '';
-            const code = message.content?.code_snippet;
-            const important = message.content?.important;
-            
-            content = `
-                <div class="message-header">
-                    <span class="message-sender">${sender}${important ? ' ⚠️' : ''}</span>
-                    <span class="message-time">${timeStr}</span>
-                </div>
-                <div class="message-body">
-                    ${text}
-                    ${code ? `<div class="code-block">${this.escapeHtml(code)}</div>` : ''}
-                </div>
-                <div class="message-meta">
-                    <span class="message-type">${message.type}</span>
-                    <span>${message.context || 'general'}${isClickable ? ' • Click to respond' : ''}</span>
-                </div>
-            `;
-        }
-
-        messageEl.innerHTML = content;
-        this.elements.messages.appendChild(messageEl);
-        this.elements.messages.scrollTop = this.elements.messages.scrollHeight;
-    }
-
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
+  }
+  
+  disableAllControls() {
+    document.getElementById('startSessionBtn').disabled = true;
+    document.getElementById('endSessionBtn').disabled = true;
+    document.getElementById('announceBtn').disabled = true;
+  }
+  
+  addQuestion(question) {
+    const questionsList = document.getElementById('questionsList');
+    const questionEl = document.createElement('div');
+    questionEl.className = `message question${question.urgent ? ' urgent' : ''}`;
+    
+    const contextBadge = `<span class="context-badge">${question.context}</span>`;
+    const urgentBadge = question.urgent ? '<span class="urgent-badge">URGENT</span>' : '';
+    
+    questionEl.innerHTML = `
+      <div class="message-header">
+        <span class="sender">${question.studentId}</span>
+        <span class="timestamp">${question.timestamp}</span>
+        ${contextBadge}
+        ${urgentBadge}
+      </div>
+      <div class="message-content">${question.text}</div>
+      <div class="message-actions">
+        <button class="btn small" onclick="this.closest('.message').style.opacity='0.5'">Mark as Read</button>
+      </div>
+    `;
+    
+    questionsList.appendChild(questionEl);
+    questionsList.scrollTop = questionsList.scrollHeight;
+  }
 }
 
-// Initialize the application when the page loads
-window.addEventListener('DOMContentLoaded', () => {
-    window.teacherApp = new TeacherApp();
-    console.log('Teacher client loaded. Connect and start a session to begin.');
+// Initialize the app when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('Initializing Switchboard Teacher App V2...');
+  new TeacherAppV2();
 });

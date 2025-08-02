@@ -1,73 +1,72 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Switchboard Student Client</title>
-    <link rel="stylesheet" href="../shared-styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Switchboard Student App V2</title>
+  <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <div id="app">
     <div class="container">
-        <!-- Header -->
-        <div class="header student-header">
-            <h1>📚 Student Client</h1>
-            <p>Ask questions, receive announcements, and participate in class sessions</p>
+      <h1>Switchboard Student App V2</h1>
+      <p class="subtitle">Simplified 6-hook architecture demo</p>
+      
+      <div class="status-section">
+        <div class="status-item">
+          <label>Connection:</label>
+          <span id="connectionStatus" class="status disconnected">Disconnected</span>
         </div>
-
-        <!-- Connection Status -->
-        <div class="status" id="status">
-            <div class="status-dot" id="statusDot"></div>
-            <div>
-                <div class="status-text" id="statusText">Disconnected</div>
-                <div class="session-info" id="sessionInfo">No active session</div>
-            </div>
+        <div class="status-item">
+          <label>Session:</label>
+          <span id="sessionStatus" class="status inactive">Waiting for session</span>
         </div>
-
-        <!-- Connection Controls -->
-        <div class="controls">
-            <h3>Connection</h3>
-            <div class="input-group">
-                <input type="text" id="studentId" placeholder="Your student ID" value="student_alice">
-                <button id="connectBtn" class="primary">Connect</button>
-                <button id="disconnectBtn" class="secondary" disabled>Disconnect</button>
-            </div>
+      </div>
+      
+      <div class="controls">
+        <button id="connectBtn" class="btn primary">Connect</button>
+        <button id="disconnectBtn" class="btn secondary" disabled>Disconnect</button>
+      </div>
+      
+      <div class="messaging-section">
+        <h3>Ask a Question</h3>
+        <div class="input-group">
+          <textarea id="questionInput" placeholder="Type your question here..." rows="3"></textarea>
+          <div class="message-options">
+            <label>
+              <input type="checkbox" id="urgentCheck"> Mark as urgent
+            </label>
+            <select id="contextSelect">
+              <option value="question">Question</option>
+              <option value="clarification">Clarification</option>
+              <option value="technical">Technical Issue</option>
+              <option value="general">General</option>
+            </select>
+          </div>
+          <div>
+            <button id="askBtn" class="btn primary" disabled>Ask Question</button>
+          </div>
         </div>
-
-        <!-- Ask Question -->
-        <div class="controls">
-            <h3>Ask a Question</h3>
-            <div class="input-group">
-                <textarea id="questionText" placeholder="Type your question here..." rows="3"></textarea>
-            </div>
-            <div class="input-group">
-                <textarea id="codeSnippet" placeholder="Optional: paste code snippet here..." rows="4"></textarea>
-                <button id="askBtn" class="success" disabled>Ask Question</button>
-            </div>
-        </div>
-
-        <!-- Messages -->
-        <div class="messages-section">
-            <div class="messages-header">
-                📢 Class Messages
-            </div>
-            <div class="messages" id="messages"></div>
-        </div>
-
-        <!-- Stats -->
-        <div class="stats">
-            <div class="stat-card">
-                <span class="stat-number" id="questionsCount">0</span>
-                <div class="stat-label">Questions Asked</div>
-            </div>
-            <div class="stat-card">
-                <span class="stat-number" id="messagesCount">0</span>
-                <div class="stat-label">Messages Received</div>
-            </div>
-        </div>
+      </div>
+      
+      <div class="messages-section">
+        <h3>Announcements & Messages</h3>
+        <div id="messagesList" class="messages-list"></div>
+      </div>
+      
+      <div class="demo-section">
+        <h3>V2 Features Demo</h3>
+        <p>This demo shows the new simplified client features:</p>
+        <ul>
+          <li>✅ Only 6 hooks (4 message types + 2 state changes)</li>
+          <li>✅ Simple object-based message sending</li>
+          <li>✅ Fixed context field handling (no double-nesting)</li>
+          <li>✅ Hidden complexity with smart defaults</li>
+        </ul>
+      </div>
     </div>
+  </div>
 
-    <!-- Load SDK and application -->
-    <script src="../../switchboard-client.js"></script>
-    <script src="student-app.js"></script>
+  <script type="module" src="./student-app.js"></script>
 </body>
 </html>
