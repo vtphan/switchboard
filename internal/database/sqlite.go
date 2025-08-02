@@ -39,6 +39,11 @@ type DatabaseMetrics struct {
 	RetriedWrites       int64
 	DeadLetterCount     int64
 	PermanentLossCount  int64
+	// Batching metrics
+	BatchesWritten      int64
+	MessagesPerBatch    int64  // Total messages written in batches
+	BatchFlushBySize    int64  // Batches flushed due to size
+	BatchFlushByTime    int64  // Batches flushed due to timer
 }
 
 // SQLiteOptions contains options for creating a SQLiteDatabaseManager
@@ -301,19 +306,113 @@ func (s *SQLiteDatabaseManager) GetSessionMessages(sessionID string) ([]*Message
 	return messages, nil
 }
 
-// writeLoop is the single-writer goroutine that processes all database writes
+// writeLoop is the single-writer goroutine that processes all database writes with batching
 func (s *SQLiteDatabaseManager) writeLoop() {
 	defer s.wg.Done()
+
+	// Batch accumulation for messages
+	messageBatch := make([]*Message, 0, config.DatabaseBatchSize)
+	responseBatch := make([]chan error, 0, config.DatabaseBatchSize)
+	
+	// Timer for time-based flushing - start with a stopped timer
+	flushTimer := time.NewTimer(config.DatabaseFlushInterval)
+	flushTimer.Stop()
+	defer flushTimer.Stop()
 
 	for {
 		select {
 		case request := <-s.writeChannel:
-			s.processWriteRequest(request)
+			if request.operation == "write_message" {
+				// Track if this is the first message in a new batch
+				isFirstMessage := len(messageBatch) == 0
+				
+				// Add message to batch
+				msg := request.data.(*Message)
+				messageBatch = append(messageBatch, msg)
+				responseBatch = append(responseBatch, request.responseCh)
+				
+				// Start timer only for the first message in a batch
+				if isFirstMessage {
+					flushTimer.Reset(config.DatabaseFlushInterval)
+				}
+				
+				// Flush if batch is full
+				if len(messageBatch) >= config.DatabaseBatchSize {
+					// Stop the timer since we're flushing
+					if !flushTimer.Stop() {
+						// Drain the timer channel if it fired
+						select {
+						case <-flushTimer.C:
+						default:
+						}
+					}
+					
+					s.flushMessageBatch(messageBatch, responseBatch)
+					messageBatch = messageBatch[:0]
+					responseBatch = responseBatch[:0]
+					atomic.AddInt64(&s.metrics.BatchFlushBySize, 1)
+				}
+			} else {
+				// Non-batchable operations execute immediately
+				s.processWriteRequest(request)
+			}
+			
+		case <-flushTimer.C:
+			// Time-based flush
+			if len(messageBatch) > 0 {
+				s.flushMessageBatch(messageBatch, responseBatch)
+				messageBatch = messageBatch[:0]
+				responseBatch = responseBatch[:0]
+				atomic.AddInt64(&s.metrics.BatchFlushByTime, 1)
+			}
+			
 		case <-s.stopCh:
+			// Stop timer
+			if !flushTimer.Stop() {
+				select {
+				case <-flushTimer.C:
+				default:
+				}
+			}
+			
+			// Final flush before shutdown
+			if len(messageBatch) > 0 {
+				s.flushMessageBatch(messageBatch, responseBatch)
+			}
 			// Process remaining requests before shutdown
 			s.drainWriteChannel()
 			return
 		}
+	}
+}
+
+// flushMessageBatch writes a batch of messages to the database and sends responses
+func (s *SQLiteDatabaseManager) flushMessageBatch(messages []*Message, responseChannels []chan error) {
+	if len(messages) == 0 {
+		return
+	}
+
+	// Log batch operation
+	log.Printf("Flushing batch of %d messages", len(messages))
+	
+	// Update batch metrics
+	atomic.AddInt64(&s.metrics.BatchesWritten, 1)
+	atomic.AddInt64(&s.metrics.MessagesPerBatch, int64(len(messages)))
+
+	// Attempt to write the batch
+	err := s.writeBatchInDB(messages)
+	
+	// Send the same result to all response channels
+	for _, respCh := range responseChannels {
+		respCh <- err
+	}
+	
+	// Update success/failure metrics
+	if err == nil {
+		atomic.AddInt64(&s.metrics.SuccessfulWrites, int64(len(messages)))
+	} else {
+		atomic.AddInt64(&s.metrics.FailedWrites, int64(len(messages)))
+		log.Printf("Failed to write batch of %d messages: %v", len(messages), err)
 	}
 }
 
@@ -700,6 +799,10 @@ func (s *SQLiteDatabaseManager) GetMetrics() *DatabaseMetrics {
 		RetriedWrites:       atomic.LoadInt64(&s.metrics.RetriedWrites),
 		DeadLetterCount:     atomic.LoadInt64(&s.metrics.DeadLetterCount),
 		PermanentLossCount:  atomic.LoadInt64(&s.metrics.PermanentLossCount),
+		BatchesWritten:      atomic.LoadInt64(&s.metrics.BatchesWritten),
+		MessagesPerBatch:    atomic.LoadInt64(&s.metrics.MessagesPerBatch),
+		BatchFlushBySize:    atomic.LoadInt64(&s.metrics.BatchFlushBySize),
+		BatchFlushByTime:    atomic.LoadInt64(&s.metrics.BatchFlushByTime),
 	}
 }
 

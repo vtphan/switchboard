@@ -97,7 +97,42 @@ func (cr *ConnectionRegistry) cleanupStaleConnections() {
 }
 ```
 
-### 3.2 WebSocket Protocol Ping/Pong Requirements
+### 3.2 Connection Replacement Protocol
+
+When a user reconnects with the same `userID`, Switchboard implements **graceful connection replacement** to prevent duplicate connections and ensure proper resource cleanup:
+
+#### **Connection Replacement Behavior**
+- **Detection**: When a new WebSocket connection arrives with an existing `userID`
+- **Graceful Closure**: The old connection is closed with WebSocket close code `4001` and reason `"replaced by newer connection"`
+- **Atomic Replacement**: The new connection immediately replaces the old one in the connection registry
+- **Resource Cleanup**: The old connection's goroutines and channels are properly cleaned up
+
+#### **Implementation Pattern**
+```go
+func (s *Switchboard) registerConnection(userID string, newConnection *Connection) {
+    s.connectionsMu.Lock()
+    defer s.connectionsMu.Unlock()
+    
+    // Check for existing connection
+    if existingConn, exists := s.connections[userID]; exists {
+        // Gracefully close the old connection
+        closeMsg := websocket.FormatCloseMessage(4001, "replaced by newer connection")
+        existingConn.WebSocket.WriteMessage(websocket.CloseMessage, closeMsg)
+        existingConn.WebSocket.Close()
+        close(existingConn.SendChannel)
+    }
+    
+    // Register the new connection
+    s.connections[userID] = newConnection
+}
+```
+
+#### **Client Behavior**
+- **Close Code 4001**: Indicates connection was replaced, not an error condition
+- **Automatic Reconnection**: Clients should handle this as a normal reconnection scenario
+- **No User Impact**: The replacement is transparent to the user experience
+
+### 3.3 WebSocket Protocol Ping/Pong Requirements
 
 Switchboard uses **WebSocket protocol-level ping/pong frames** (RFC 6455) for connection health monitoring:
 
@@ -152,7 +187,7 @@ go func() {
 - **Timeout**: Server waits maximum 30 seconds for pong response
 - **Connection Termination**: No pong response = dead connection cleanup
 
-### 3.3 Connection State Transitions
+### 3.4 Connection State Transitions
 
 ```
 Client Connect → Registry Registration → Heartbeat Tracking
@@ -166,7 +201,7 @@ Heartbeat Failed OR Timeout Exceeded → Connection Cleanup
 
 ## 4. Architecture Overview
 
-### 3.1 System State Model
+### 4.1 System State Model
 
 ```go
 type Switchboard struct {
@@ -205,7 +240,7 @@ type Connection struct {
 }
 ```
 
-### 3.2 Unified Database Management Interface
+### 4.2 Unified Database Management Interface
 
 ```go
 // Single interface for all database operations
@@ -236,7 +271,7 @@ type SQLiteDatabaseManager struct {
 }
 ```
 
-### 3.3 Message Flow Architecture
+### 4.3 Message Flow Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -252,9 +287,9 @@ type SQLiteDatabaseManager struct {
                        └──────────────────┘    └─────────────────┘
 ```
 
-## 4. Core Algorithms
+## 5. Core Algorithms
 
-### 4.1 Standardized Session State Access
+### 5.1 Standardized Session State Access
 
 **Interface Contract (Keep Exact):**
 ```go
@@ -296,7 +331,7 @@ Function HasActiveSession():
   4. Return boolean result
 ```
 
-### 4.2 Connection Lifecycle Management
+### 5.2 Connection Lifecycle Management
 
 ```go
 func (s *Switchboard) HandleClientConnection(ws *websocket.Conn, userID, role string) error {
@@ -350,7 +385,7 @@ Function connectionCleanupLoop():
 
 Function cleanupStaleConnections():
   1. Lock connectionsMu
-  2. Calculate cutoff time = now - ConnectionTimeout
+  2. Calculate cutoff time = now - InactiveConnectionTimeout
   3. For each connection in connections map:
      - If connection.LastSeen < cutoff:
        - Close WebSocket connection
@@ -398,7 +433,7 @@ Function connectionWriteLoop(connection):
 ```
 ```
 
-### 4.3 Message Processing Algorithm
+### 5.3 Message Processing Algorithm
 
 ```
 Function ProcessIncomingMessage(rawData, senderID):
@@ -443,7 +478,7 @@ Function ProcessIncomingMessage(rawData, senderID):
   8. Return success to sender
 ```
 
-### 4.4 Session Lifecycle Management
+### 5.4 Session Lifecycle Management
 
 ```
 Function StartSession(sessionName, instructorID):
@@ -495,7 +530,7 @@ Function EndSession(instructorID):
   5. Return success
 ```
 
-### 4.5 Unified Error Handling
+### 5.5 Unified Error Handling
 
 **Error Handler Interface (Keep Exact):**
 ```go
@@ -515,6 +550,46 @@ var (
     ErrInvalidMessageType  = errors.New("invalid message type")
     ErrRateLimitExceeded   = errors.New("rate limit exceeded")
 )
+```
+
+#### **Non-Retryable Error Patterns**
+
+Certain errors represent **permanent conditions** that should NOT be retried, as retrying would be futile and could cause infinite retry loops:
+
+**Business Logic Errors (Never Retry):**
+- `ErrSessionAlreadyActive` - Session state constraint violation
+- `ErrNoActiveSession` - Message rejected due to session state
+- `ErrRateLimitExceeded` - User has exceeded rate limits
+- `ErrInvalidMessageType` - Message structure violations
+
+**Database Constraint Violations (Never Retry):**
+- **UNIQUE constraint** - Duplicate key violations
+- **FOREIGN KEY constraint** - Referenced record doesn't exist
+- **CHECK constraint** - Data validation failures
+- **NOT NULL constraint** - Required field missing
+
+**Implementation Pattern:**
+```go
+func isRetryableError(err error) bool {
+    // Business logic errors are not retryable
+    if errors.Is(err, ErrSessionAlreadyActive) ||
+       errors.Is(err, ErrNoActiveSession) ||
+       errors.Is(err, ErrRateLimitExceeded) ||
+       errors.Is(err, ErrInvalidMessageType) {
+        return false
+    }
+    
+    // Database constraint violations are not retryable
+    if strings.Contains(err.Error(), "UNIQUE constraint") ||
+       strings.Contains(err.Error(), "FOREIGN KEY constraint") ||
+       strings.Contains(err.Error(), "CHECK constraint") ||
+       strings.Contains(err.Error(), "NOT NULL constraint") {
+        return false
+    }
+    
+    // Network errors, temporary database locks, etc. are retryable
+    return true
+}
 ```
 
 **Error Handling Patterns:**
@@ -549,9 +624,9 @@ Function formatClientError(errorType, message):
   Ensure consistent error format across all client communications
 ```
 
-## 5. Data Models
+## 6. Data Models
 
-### 5.1 Core Data Structures
+### 6.1 Core Data Structures
 
 ```go
 // Message - 3-type message structure
@@ -589,9 +664,9 @@ const (
 )
 ```
 
-## 6. Database Design
+## 7. Database Design
 
-### 6.1 Optimized Schema
+### 7.1 Optimized Schema
 
 ```sql
 -- Ultra-simple sessions table
@@ -631,9 +706,9 @@ CREATE INDEX idx_messages_type_context ON messages(type, context);
 CREATE INDEX idx_messages_to_user ON messages(to_user) WHERE to_user IS NOT NULL;
 ```
 
-## 7. Database Implementation
+## 8. Database Implementation
 
-### 7.1 SQLite Database Manager Implementation
+### 8.1 SQLite Database Manager Implementation
 
 **Database Manager Structure (Keep Exact):**
 ```go
@@ -652,6 +727,11 @@ type DatabaseMetrics struct {
     RetriedWrites       int64
     DeadLetterCount     int64
     PermanentLossCount  int64
+    // Batching metrics
+    BatchesWritten      int64
+    MessagesPerBatch    int64  // Total messages written in batches
+    BatchFlushBySize    int64  // Batches flushed due to size
+    BatchFlushByTime    int64  // Batches flushed due to timer
 }
 ```
 
@@ -668,27 +748,50 @@ Function NewSQLiteDatabaseManager(database):
      - Initialize metrics tracking
      - Setup stop channel
   
-  3. Create internal message batcher
+  3. Initialize metrics tracking
   4. Return configured manager
 ```
 
-**Write Processing Algorithm:**
+**Write Processing Algorithm with Built-in Batching:**
 ```
 Function Start():
   Start two background goroutines:
-    1. writeLoop() - Process write requests
+    1. writeLoop() - Process write requests with batching
     2. deadLetterProcessor() - Handle failed writes
 
 Function writeLoop():
+  Initialize message batch and response channels
+  Create flush timer (stopped initially)
+  
   Loop:
     Wait for:
       - Write request from writeChannel:
-        - Execute with retry logic (max DatabaseMaxRetries)
-        - If all retries fail:
-          - Try to queue in deadLetterQueue
-          - If dead letter queue full: log permanent loss
-        - If successful: increment success metrics
-      - Stop signal: exit loop
+        If operation is "write_message":
+          - Add message to batch
+          - Start timer if this is first message in batch
+          - If batch full (DatabaseBatchSize):
+            - Stop timer
+            - Flush batch immediately
+            - Reset batch and increment BatchFlushBySize metric
+        Else:
+          - Execute non-batchable operations immediately
+      
+      - Timer expires:
+        - If batch not empty: flush batch and increment BatchFlushByTime metric
+        - Reset batch
+      
+      - Stop signal: 
+        - Flush any pending batch
+        - Process remaining requests
+        - Exit loop
+
+Function flushMessageBatch(messages, responseChannels):
+  1. If batch is empty: return
+  2. Log batch operation details
+  3. Update batch metrics (BatchesWritten, MessagesPerBatch)
+  4. Execute batch write using writeBatchInDB()
+  5. Send same result to all response channels
+  6. Update success/failure metrics
 
 Function executeWithRetry(request, maxAttempts):
   Set initial backoff = 100ms
@@ -696,7 +799,7 @@ Function executeWithRetry(request, maxAttempts):
   For attempt 1 to maxAttempts:
     1. Try to execute request against database
     2. If successful: return success
-    3. If error is not retryable: return error
+    3. If error is not retryable (business logic or constraint violation): return error immediately
     4. If more attempts remaining:
        - Sleep for backoff duration
        - Double backoff time (exponential backoff)
@@ -705,34 +808,9 @@ Function executeWithRetry(request, maxAttempts):
   Return "max retries exceeded" error
 ```
 
-**Message Batching Algorithm:**
-```
-Function addMessage(message):
-  1. Lock batcher mutex
-  2. Add message to current batch
-  3. If this is first message in batch:
-     - Start flush timer (DatabaseFlushInterval)
-  4. If batch reaches DatabaseBatchSize:
-     - Flush batch immediately
-  5. Unlock mutex
+## 9. WebSocket Protocol Specifications
 
-Function flushBatch():
-  1. If no messages: return
-  2. Copy messages to new batch array
-  3. Clear internal message buffer
-  4. Create batch write request
-  5. Try to send to writeChannel:
-     - If successful: batch queued
-     - If channel full: log dropped batch warning
-
-Function resetTimer():
-  Reset flush timer to DatabaseFlushInterval
-  When timer expires: call flushBatch()
-```
-
-## 8. WebSocket Protocol Specifications
-
-### 8.1 Message Size and Format Constraints
+### 9.1 Message Size and Format Constraints
 
 **Message Size Limits**
 - **Maximum Message Size**: 64KB (65,536 bytes) per WebSocket frame
@@ -750,7 +828,7 @@ Function resetTimer():
 }
 ```
 
-### 8.2 Connection Close Protocol
+### 9.2 Connection Close Protocol
 
 **Graceful Shutdown**
 - **Close Code**: 1001 (Going Away)
@@ -762,8 +840,9 @@ Function resetTimer():
 - Message size violation (exceeds 64KB)
 - Authentication failure during connection establishment
 - Rate limit violations (excessive message sending)
+- Connection replacement (code 4001, "replaced by newer connection")
 
-### 8.3 Error Message Format
+### 9.3 Error Message Format
 
 **WebSocket Error Messages**
 All errors are sent as JSON messages over the WebSocket connection:
@@ -785,7 +864,7 @@ All errors are sent as JSON messages over the WebSocket connection:
 - `invalid_recipient` - Direct message to non-existent user
 - `message_too_large` - Message exceeds 64KB limit
 
-### 8.4 Session History Delivery Protocol
+### 9.4 Session History Delivery Protocol
 
 **Late Joiner Message Sequence**
 1. **Connection State**: Session active/waiting message
@@ -807,9 +886,9 @@ All errors are sent as JSON messages over the WebSocket connection:
 - **Students**: See own messages + direct messages involving them + broadcasts to students
 - **Instructors**: See all messages without filtering
 
-## 9. HTTP API Specifications
+## 10. HTTP API Specifications
 
-### 9.1 Session Management API
+### 10.1 Session Management API
 
 **Start Session**
 ```http
@@ -850,7 +929,7 @@ Response: 200 OK
 }
 ```
 
-### 8.2 WebSocket Connection
+### 10.2 WebSocket Connection
 
 **Connection URL**
 ```
@@ -890,7 +969,7 @@ Parameters:
 }
 ```
 
-## 9. Role-Based Message Filtering
+## 11. Role-Based Message Filtering
 
 ```go
 func shouldReceiveMessage(message *Message, recipientRole, recipientUserID string) bool {
@@ -924,7 +1003,7 @@ func shouldReceiveMessage(message *Message, recipientRole, recipientUserID strin
 }
 ```
 
-## 10. Graceful Shutdown Implementation
+## 12. Graceful Shutdown Implementation
 
 ```
 Function Shutdown(shutdownContext):
@@ -981,20 +1060,21 @@ Function RunWithGracefulShutdown():
   Return shutdown result
 ```
 
-## 11. Performance Characteristics
+## 13. Performance Characteristics
 
-### 11.1 Measured Performance
-- **Message routing**: 83.992µs average latency
-- **Database batching**: 500+ messages/second capability  
+### 13.1 Measured Performance
+- **Message routing**: <10ms average latency (real-time delivery)
+- **Database batching**: 500+ messages/second sustained throughput
+- **Batch efficiency**: 100 messages per batch (default), <200ms maximum latency
 - **Memory usage**: 2.6MB peak for 53 concurrent connections
 - **Connection stability**: Zero errors under load testing
 
-### 11.2 Resource Requirements
+### 13.2 Resource Requirements
 
 **Memory:**
 - Base system: ~10MB
 - Per connection: ~2KB (WebSocket + buffers)
-- Message batching: ~100KB per batch
+- Message batching: Built into single-writer (no additional overhead)
 - 50 concurrent users: ~15MB total memory usage
 
 **Database:**
@@ -1002,7 +1082,7 @@ Function RunWithGracefulShutdown():
 - ~1KB per message storage requirement
 - Indexes require ~20% additional storage
 
-### 11.3 Scaling Characteristics
+### 13.3 Scaling Characteristics
 
 **Target Performance:**
 - 50 concurrent students + instructors
@@ -1010,15 +1090,15 @@ Function RunWithGracefulShutdown():
 - <100µs message routing latency
 - >99% message delivery reliability
 
-## 12. Security and Privacy
+## 14. Security and Privacy
 
-### 12.1 Security Model
+### 14.1 Security Model
 - **Authentication**: WebSocket connections authenticated at application layer
 - **Message Security**: Content treated as opaque JSON with 64KB size limits
 - **Rate Limiting**: 100 messages/minute per user prevents spam
 - **Transport Security**: WebSocket connections over TLS in production
 
-### 12.2 Educational Privacy Preservation
+### 14.2 Educational Privacy Preservation
 - **Instructors**: See all messages for educational oversight
 - **Students**: See only messages involving them directly
 - **Audit Trail**: All messages persisted with complete metadata

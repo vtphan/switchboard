@@ -19,10 +19,15 @@ func TestSQLiteArchitecturalCompliance(t *testing.T) {
 		assert.NoError(t, err, "SQLite implementation file must exist at %s", filePath)
 	})
 
-	t.Run("Batch implementation file exists", func(t *testing.T) {
-		filePath := "/Users/vinhthuyphan/Apps/switchboard/internal/database/batch.go"
-		_, err := os.Stat(filePath)
-		assert.NoError(t, err, "Batch implementation file must exist at %s", filePath)
+	t.Run("Batching is built into SQLite implementation", func(t *testing.T) {
+		filePath := "/Users/vinhthuyphan/Apps/switchboard/internal/database/sqlite.go"
+		content, err := os.ReadFile(filePath)
+		require.NoError(t, err, "SQLite implementation file must exist")
+		
+		contentStr := string(content)
+		assert.Contains(t, contentStr, "flushMessageBatch", "SQLite implementation must have built-in batching")
+		assert.Contains(t, contentStr, "config.DatabaseBatchSize", "SQLite implementation must use DatabaseBatchSize")
+		assert.Contains(t, contentStr, "config.DatabaseFlushInterval", "SQLite implementation must use DatabaseFlushInterval")
 	})
 }
 
@@ -37,15 +42,6 @@ func TestSQLitePackageStructure(t *testing.T) {
 		assert.Contains(t, string(content), "package database", "SQLite file must have correct package declaration")
 	})
 
-	t.Run("Batch file has correct package declaration", func(t *testing.T) {
-		filePath := "/Users/vinhthuyphan/Apps/switchboard/internal/database/batch.go"
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			t.Skip("Batch file not implemented yet")
-		}
-
-		assert.Contains(t, string(content), "package database", "Batch file must have correct package declaration")
-	})
 }
 
 func TestSQLiteImportRestrictions(t *testing.T) {
@@ -70,19 +66,6 @@ func TestSQLiteImportRestrictions(t *testing.T) {
 		}
 	})
 
-	t.Run("Batch file has no forbidden imports", func(t *testing.T) {
-		filePath := "/Users/vinhthuyphan/Apps/switchboard/internal/database/batch.go"
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			t.Skip("Batch file not implemented yet")
-		}
-
-		contentStr := string(content)
-		for _, forbidden := range forbiddenImports {
-			assert.NotContains(t, contentStr, forbidden, 
-				"Batch implementation must not import %s (architectural layer violation)", forbidden)
-		}
-	})
 }
 
 func TestSQLiteDatabaseManagerStructure(t *testing.T) {
@@ -187,10 +170,11 @@ func TestDatabaseMetricsStructure(t *testing.T) {
 				if structType, ok := typeSpec.Type.(*ast.StructType); ok {
 					found = true
 					
-					// Check for exact required fields
+					// Check for exact required fields (including new batch metrics)
 					requiredFields := []string{
 						"SuccessfulWrites", "FailedWrites", "RetriedWrites", 
 						"DeadLetterCount", "PermanentLossCount",
+						"BatchesWritten", "MessagesPerBatch", "BatchFlushBySize", "BatchFlushByTime",
 					}
 					
 					foundFields := make(map[string]bool)
@@ -306,25 +290,25 @@ func TestSingleWriterPatternArchitecture(t *testing.T) {
 }
 
 func TestBatchingArchitecture(t *testing.T) {
-	t.Run("Message batching implementation exists", func(t *testing.T) {
-		filePath := "/Users/vinhthuyphan/Apps/switchboard/internal/database/batch.go"
+	t.Run("Built-in message batching implementation exists", func(t *testing.T) {
+		filePath := "/Users/vinhthuyphan/Apps/switchboard/internal/database/sqlite.go"
 		content, err := os.ReadFile(filePath)
-		if err != nil {
-			t.Skip("Batch file not implemented yet")
-		}
+		require.NoError(t, err, "SQLite file must exist")
 
 		contentStr := string(content)
 		
-		// Check for batching components
-		assert.Contains(t, contentStr, "Batcher", 
-			"Batch implementation must have Batcher struct or interface")
-		assert.Contains(t, contentStr, "addMessage", 
-			"Batch implementation must have addMessage method")
-		assert.Contains(t, contentStr, "flushBatch", 
-			"Batch implementation must have flushBatch method")
+		// Check for built-in batching components
+		assert.Contains(t, contentStr, "flushMessageBatch", 
+			"SQLite implementation must have flushMessageBatch method")
+		assert.Contains(t, contentStr, "messageBatch", 
+			"SQLite implementation must have message batching in writeLoop")
 		assert.Contains(t, contentStr, "config.DatabaseBatchSize", 
-			"Batch implementation must use DatabaseBatchSize constant")
+			"SQLite implementation must use DatabaseBatchSize constant")
 		assert.Contains(t, contentStr, "config.DatabaseFlushInterval", 
-			"Batch implementation must use DatabaseFlushInterval constant")
+			"SQLite implementation must use DatabaseFlushInterval constant")
+		assert.Contains(t, contentStr, "BatchFlushBySize", 
+			"SQLite implementation must track batch flush metrics")
+		assert.Contains(t, contentStr, "BatchFlushByTime", 
+			"SQLite implementation must track timer-based flush metrics")
 	})
 }
