@@ -20,6 +20,17 @@ import (
 	"switchboard/internal/session"
 )
 
+// mockSystemBroadcaster is a no-op broadcaster for tests
+type mockSystemBroadcaster struct{}
+
+func (m *mockSystemBroadcaster) BroadcastSessionStarted(sessionID, sessionName, startedBy string, startTime time.Time) error {
+	return nil
+}
+
+func (m *mockSystemBroadcaster) BroadcastSessionEnded(sessionID, endedBy string, endTime time.Time) error {
+	return nil
+}
+
 // TestSessionStateRaceConditionPrevention validates that concurrent session 
 // operations maintain system consistency and prevent race conditions
 func TestSessionStateRaceConditionPrevention(t *testing.T) {
@@ -282,7 +293,8 @@ func setupTestEnvironment(t *testing.T) *testEnvironment {
 	require.NoError(t, dbManager.Start())
 
 	sessionManager := session.NewSessionManager(dbManager)
-	sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager)
+	mockBroadcaster := &mockSystemBroadcaster{}
+	sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager, mockBroadcaster)
 
 	return &testEnvironment{
 		db:               db,

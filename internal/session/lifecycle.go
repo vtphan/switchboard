@@ -15,18 +15,27 @@ type SessionLifecycleInterface interface {
 	EndSession(instructorID string) (*database.Session, error)
 }
 
+// SystemBroadcaster defines a simplified interface for broadcasting system messages
+// This avoids import cycles by having a focused interface just for session events
+type SystemBroadcaster interface {
+	BroadcastSessionStarted(sessionID, sessionName, startedBy string, startTime time.Time) error
+	BroadcastSessionEnded(sessionID, endedBy string, endTime time.Time) error
+}
+
 // SessionLifecycle handles session start/end operations following the exact
 // implementation pattern specified in tech specs lines 349-396.
 type SessionLifecycle struct {
-	sessionManager SessionManager
-	dbManager      database.DatabaseManager
+	sessionManager    SessionManager
+	dbManager         database.DatabaseManager
+	systemBroadcaster SystemBroadcaster
 }
 
 // NewSessionLifecycle creates a new SessionLifecycle instance with required dependencies
-func NewSessionLifecycle(sessionManager SessionManager, dbManager database.DatabaseManager) *SessionLifecycle {
+func NewSessionLifecycle(sessionManager SessionManager, dbManager database.DatabaseManager, systemBroadcaster SystemBroadcaster) *SessionLifecycle {
 	return &SessionLifecycle{
-		sessionManager: sessionManager,
-		dbManager:      dbManager,
+		sessionManager:    sessionManager,
+		dbManager:         dbManager,
+		systemBroadcaster: systemBroadcaster,
 	}
 }
 
@@ -82,7 +91,15 @@ func (sl *SessionLifecycle) StartSession(sessionName, instructorID string) (*dat
 		}
 	}
 	
-	// Step 6: Return session details
+	// Step 6: Broadcast session_started system message to all connected users
+	if sl.systemBroadcaster != nil {
+		if err := sl.systemBroadcaster.BroadcastSessionStarted(session.ID, session.Name, session.CreatedBy, session.StartTime); err != nil {
+			// Log broadcast failure but don't fail the session creation
+			log.Printf("Warning: Failed to broadcast session_started message: %v", err)
+		}
+	}
+	
+	// Step 7: Return session details
 	return session, nil
 }
 
@@ -112,6 +129,14 @@ func (sl *SessionLifecycle) EndSession(instructorID string) (*database.Session, 
 		return nil, fmt.Errorf("failed to end session in database: %w", err)
 	}
 	
-	// Step 4: Return ended session
+	// Step 4: Broadcast session_ended system message to all connected users
+	if sl.systemBroadcaster != nil {
+		if err := sl.systemBroadcaster.BroadcastSessionEnded(sessionCopy.ID, sessionCopy.CreatedBy, *sessionCopy.EndTime); err != nil {
+			// Log broadcast failure but don't fail the session ending
+			log.Printf("Warning: Failed to broadcast session_ended message: %v", err)
+		}
+	}
+	
+	// Step 5: Return ended session
 	return &sessionCopy, nil
 }

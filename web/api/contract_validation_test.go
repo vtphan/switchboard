@@ -16,6 +16,16 @@ import (
 	"switchboard/pkg/errors"
 )
 
+// mockSystemBroadcaster for tests
+type mockSystemBroadcaster struct{}
+
+func (m *mockSystemBroadcaster) BroadcastSessionStarted(sessionID, sessionName, startedBy string, startTime time.Time) error {
+	return nil
+}
+
+func (m *mockSystemBroadcaster) BroadcastSessionEnded(sessionID, endedBy string, endTime time.Time) error {
+	return nil
+}
 // TestContractValidation_Step51_IntegrationContracts validates all integration contracts
 // for Step 5.1 as specified in integration-graph.yaml
 func TestContractValidation_Step51_IntegrationContracts(t *testing.T) {
@@ -25,7 +35,7 @@ func TestContractValidation_Step51_IntegrationContracts(t *testing.T) {
 		// Setup mock dependencies
 		mockDB := &mockDatabaseManager{}
 		sessionManager := session.NewSessionManager(mockDB)
-		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB)
+		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB, &mockSystemBroadcaster{})
 		handler := NewSessionAPIHandler(sessionLifecycle)
 
 		// Test contract: HTTP POST /api/session/start creates session
@@ -66,7 +76,7 @@ func TestContractValidation_Step51_IntegrationContracts(t *testing.T) {
 		// Setup with active session
 		mockDB := &mockDatabaseManager{}
 		sessionManager := session.NewSessionManager(mockDB)
-		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB)
+		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB, &mockSystemBroadcaster{})
 		handler := NewSessionAPIHandler(sessionLifecycle)
 
 		// First create a session
@@ -106,7 +116,7 @@ func TestContractValidation_Step51_IntegrationContracts(t *testing.T) {
 		// Setup with existing active session
 		mockDB := &mockDatabaseManager{}
 		sessionManager := session.NewSessionManager(mockDB)
-		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB)
+		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB, &mockSystemBroadcaster{})
 		handler := NewSessionAPIHandler(sessionLifecycle)
 
 		// Create initial session
@@ -142,7 +152,7 @@ func TestContractValidation_Step51_IntegrationContracts(t *testing.T) {
 		// Setup with no active session
 		mockDB := &mockDatabaseManager{}
 		sessionManager := session.NewSessionManager(mockDB)
-		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB)
+		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB, &mockSystemBroadcaster{})
 		handler := NewSessionAPIHandler(sessionLifecycle)
 
 		// Ensure no active session
@@ -175,7 +185,7 @@ func TestContractValidation_Step51_IntegrationContracts(t *testing.T) {
 		
 		mockDB := &mockDatabaseManager{}
 		sessionManager := session.NewSessionManager(mockDB)
-		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB)
+		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB, &mockSystemBroadcaster{})
 		handler := NewSessionAPIHandler(sessionLifecycle)
 
 		// Test StartSession response format

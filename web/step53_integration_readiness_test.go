@@ -15,6 +15,16 @@ import (
 	"switchboard/web/api"
 )
 
+// mockSystemBroadcaster for tests
+type mockSystemBroadcaster struct{}
+
+func (m *mockSystemBroadcaster) BroadcastSessionStarted(sessionID, sessionName, startedBy string, startTime time.Time) error {
+	return nil
+}
+
+func (m *mockSystemBroadcaster) BroadcastSessionEnded(sessionID, endedBy string, endTime time.Time) error {
+	return nil
+}
 // TestStep53IntegrationReadiness validates that Step 5.2 HTTPServer is ready
 // for integration with Step 5.3 main application system integration
 func TestStep53IntegrationReadiness(t *testing.T) {
@@ -27,7 +37,7 @@ func TestStep53IntegrationReadiness(t *testing.T) {
 		// Create mock dependencies as Step 5.3 will  
 		mockDB := newMockDatabaseManager()
 		sessionManager := session.NewSessionManager(mockDB)
-		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB)
+		sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB, &mockSystemBroadcaster{})
 		
 		// Create SessionAPIHandler as Step 5.3 will
 		sessionAPIHandler := api.NewSessionAPIHandler(sessionLifecycle)

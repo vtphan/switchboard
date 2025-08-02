@@ -14,6 +14,16 @@ import (
 	"switchboard/internal/session"
 )
 
+// mockSystemBroadcaster for tests
+type mockSystemBroadcaster struct{}
+
+func (m *mockSystemBroadcaster) BroadcastSessionStarted(sessionID, sessionName, startedBy string, startTime time.Time) error {
+	return nil
+}
+
+func (m *mockSystemBroadcaster) BroadcastSessionEnded(sessionID, endedBy string, endTime time.Time) error {
+	return nil
+}
 // MockDatabaseManager provides a test double for DatabaseManager
 type MockDatabaseManager struct {
 	createSessionFunc func(*database.Session) error
@@ -66,7 +76,7 @@ func TestIntegration_SessionAPIHandler_WithRealSessionLifecycle(t *testing.T) {
 	// Setup real SessionLifecycle with mock dependencies
 	dbManager := &MockDatabaseManager{}
 	sessionManager := session.NewSessionManager(dbManager)
-	sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager)
+	sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager, &mockSystemBroadcaster{})
 	
 	// Create API handler with real SessionLifecycle
 	handler := NewSessionAPIHandler(sessionLifecycle)
@@ -124,7 +134,7 @@ func TestIntegration_SessionAPIHandler_ConflictHandling(t *testing.T) {
 	// Setup real SessionLifecycle
 	dbManager := &MockDatabaseManager{}
 	sessionManager := session.NewSessionManager(dbManager)
-	sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager)
+	sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager, &mockSystemBroadcaster{})
 	handler := NewSessionAPIHandler(sessionLifecycle)
 	
 	// Start first session

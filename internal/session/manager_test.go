@@ -20,8 +20,8 @@ func TestArchitectural_SessionManagerInterface(t *testing.T) {
 	assert.Equal(t, "SessionManager", sessionManagerType.Name())
 	assert.True(t, sessionManagerType.Kind() == reflect.Interface)
 
-	// Verify exact method count - must be exactly 4 methods
-	assert.Equal(t, 4, sessionManagerType.NumMethod())
+	// Verify exact method count - must be exactly 5 methods
+	assert.Equal(t, 5, sessionManagerType.NumMethod())
 
 	// GetActiveSession() *Session
 	getMethod, exists := sessionManagerType.MethodByName("GetActiveSession")

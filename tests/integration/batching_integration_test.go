@@ -20,6 +20,17 @@ import (
 	"switchboard/pkg/config"
 )
 
+// mockSystemBroadcaster for tests
+type mockSystemBroadcaster struct{}
+
+func (m *mockSystemBroadcaster) BroadcastSessionStarted(sessionID, sessionName, startedBy string, startTime time.Time) error {
+	return nil
+}
+
+func (m *mockSystemBroadcaster) BroadcastSessionEnded(sessionID, endedBy string, endTime time.Time) error {
+	return nil
+}
+
 // BatchingMockBroadcastSystem tracks when broadcasts happen during batching tests
 type BatchingMockBroadcastSystem struct {
 	mu               sync.Mutex
@@ -151,7 +162,8 @@ func TestBatchingIntegration(t *testing.T) {
 		}()
 
 		sessionManager := session.NewSessionManager(dbManager)
-		sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager)
+		mockBroadcaster := &mockSystemBroadcaster{}
+		sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager, mockBroadcaster)
 		connectionRegistry := websocket.NewConnectionRegistry(sessionManager)
 		rateLimiter := rate.NewRateLimiter()
 		

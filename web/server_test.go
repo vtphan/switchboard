@@ -21,6 +21,16 @@ import (
 	"switchboard/web/api"
 )
 
+// mockSystemBroadcaster for tests
+type mockSystemBroadcaster struct{}
+
+func (m *mockSystemBroadcaster) BroadcastSessionStarted(sessionID, sessionName, startedBy string, startTime time.Time) error {
+	return nil
+}
+
+func (m *mockSystemBroadcaster) BroadcastSessionEnded(sessionID, endedBy string, endTime time.Time) error {
+	return nil
+}
 // Mock database for real component testing
 type mockDatabaseManager struct {
 	sessions map[string]*database.Session
@@ -130,7 +140,7 @@ func (m *MockWebSocketHandler) HandleWebSocketUpgrade(w http.ResponseWriter, r *
 func createTestComponents() (*api.SessionAPIHandler, *websocket.WebSocketHandler) {
 	mockDB := newMockDatabaseManager()
 	sessionManager := session.NewSessionManager(mockDB)
-	sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB)
+	sessionLifecycle := session.NewSessionLifecycle(sessionManager, mockDB, &mockSystemBroadcaster{})
 	sessionHandler := api.NewSessionAPIHandler(sessionLifecycle)
 	
 	// Create a real WebSocketHandler with minimal dependencies

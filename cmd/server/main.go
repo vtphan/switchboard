@@ -125,7 +125,6 @@ func NewApplication(config *Config) (*Application, error) {
 
 	// Phase 2: Initialize session management
 	app.sessionManager = session.NewSessionManager(app.dbManager)
-	app.sessionLifecycle = session.NewSessionLifecycle(app.sessionManager, app.dbManager)
 
 	// Phase 3: Initialize message processing
 	app.rateLimiter = rate.NewRateLimiter()
@@ -137,6 +136,12 @@ func NewApplication(config *Config) (*Application, error) {
 	// Initialize BroadcastSystem with connection registry and role-based filter
 	filterAdapter := websocket.NewFilterAdapter(roleBasedFilter)
 	app.broadcastSystem = websocket.NewBroadcastSystem(app.connectionRegistry, filterAdapter)
+
+	// Initialize SessionBroadcaster as adapter between SessionLifecycle and BroadcastSystem
+	sessionBroadcaster := websocket.NewSessionBroadcaster(app.broadcastSystem, app.connectionRegistry)
+
+	// Initialize SessionLifecycle with system broadcaster dependency
+	app.sessionLifecycle = session.NewSessionLifecycle(app.sessionManager, app.dbManager, sessionBroadcaster)
 
 	app.messageProcessor = message.NewMessageProcessor(
 		app.sessionManager,

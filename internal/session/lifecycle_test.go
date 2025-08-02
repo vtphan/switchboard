@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,6 +12,41 @@ import (
 	"switchboard/internal/database"
 	"switchboard/pkg/errors"
 )
+
+// mockSystemBroadcaster is a mock implementation of SystemBroadcaster for testing
+type mockSystemBroadcaster struct {
+	sessionStartedCalls []struct {
+		sessionID   string
+		sessionName string
+		startedBy   string
+		startTime   time.Time
+	}
+	sessionEndedCalls []struct {
+		sessionID string
+		endedBy   string
+		endTime   time.Time
+	}
+	broadcastError error
+}
+
+func (m *mockSystemBroadcaster) BroadcastSessionStarted(sessionID, sessionName, startedBy string, startTime time.Time) error {
+	m.sessionStartedCalls = append(m.sessionStartedCalls, struct {
+		sessionID   string
+		sessionName string
+		startedBy   string
+		startTime   time.Time
+	}{sessionID, sessionName, startedBy, startTime})
+	return m.broadcastError
+}
+
+func (m *mockSystemBroadcaster) BroadcastSessionEnded(sessionID, endedBy string, endTime time.Time) error {
+	m.sessionEndedCalls = append(m.sessionEndedCalls, struct {
+		sessionID string
+		endedBy   string
+		endTime   time.Time
+	}{sessionID, endedBy, endTime})
+	return m.broadcastError
+}
 
 // TestArchitectural_SessionLifecycleStruct verifies the SessionLifecycle struct
 // has the exact fields required for session lifecycle management
@@ -79,8 +115,9 @@ func TestArchitectural_NewSessionLifecycleConstructor(t *testing.T) {
 	// This will be used later for testing the actual implementation
 	var sessionManager SessionManager
 	var dbManager database.DatabaseManager
+	var systemBroadcaster SystemBroadcaster
 	
-	lifecycle := NewSessionLifecycle(sessionManager, dbManager)
+	lifecycle := NewSessionLifecycle(sessionManager, dbManager, systemBroadcaster)
 	assert.NotNil(t, lifecycle)
 }
 
@@ -251,7 +288,8 @@ func TestTechnical_FullLifecycleFlow(t *testing.T) {
 	// This test exercises the actual implementation for coverage
 	mockSessionManager := &fullMockSessionManager{}
 	mockDBManager := &fullMockDBManager{}
-	lifecycle := NewSessionLifecycle(mockSessionManager, mockDBManager)
+	mockBroadcaster := &mockSystemBroadcaster{}
+	lifecycle := NewSessionLifecycle(mockSessionManager, mockDBManager, mockBroadcaster)
 	
 	// Test successful session start
 	session, err := lifecycle.StartSession("Test Session", "instructor123")
@@ -350,7 +388,8 @@ func TestTechnical_ErrorPaths(t *testing.T) {
 	// Test database rollback on CreateSession failure
 	mockSessionManager := &fullMockSessionManager{}
 	mockDBManager := &failingMockDBManager{}
-	lifecycle := NewSessionLifecycle(mockSessionManager, mockDBManager)
+	mockBroadcaster := &mockSystemBroadcaster{}
+	lifecycle := NewSessionLifecycle(mockSessionManager, mockDBManager, mockBroadcaster)
 	
 	session, err := lifecycle.StartSession("Test Session", "instructor123")
 	assert.Error(t, err)

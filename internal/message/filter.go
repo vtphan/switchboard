@@ -63,6 +63,10 @@ func (f *RoleBasedFilter) ShouldReceiveMessage(msg *database.Message, recipient 
 		// All students and instructors should receive broadcast_to_students messages
 		return recipientRole == "student" || recipientRole == "instructor"
 
+	case "system":
+		// System messages (like session_started, session_ended) should be delivered to all users
+		return true
+
 	default:
 		// Unknown message types are not delivered
 		return false

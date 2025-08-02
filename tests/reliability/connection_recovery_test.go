@@ -31,6 +31,16 @@ import (
 	"switchboard/web/api"
 )
 
+// mockSystemBroadcaster for tests
+type mockSystemBroadcaster struct{}
+
+func (m *mockSystemBroadcaster) BroadcastSessionStarted(sessionID, sessionName, startedBy string, startTime time.Time) error {
+	return nil
+}
+
+func (m *mockSystemBroadcaster) BroadcastSessionEnded(sessionID, endedBy string, endTime time.Time) error {
+	return nil
+}
 // Test 4.2: Connection Recovery & Message Persistence
 // Priority: P1-High
 // Type: Reliability/Integration Test
@@ -628,7 +638,7 @@ func startTestServer() (*testServer, error) {
 	
 	// Initialize components
 	sessionManager := session.NewSessionManager(dbManager)
-	sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager)
+	sessionLifecycle := session.NewSessionLifecycle(sessionManager, dbManager, &mockSystemBroadcaster{})
 	rateLimiter := rate.NewRateLimiter()
 	connectionRegistry := internalWS.NewConnectionRegistry(sessionManager)
 	
