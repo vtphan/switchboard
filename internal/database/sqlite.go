@@ -353,6 +353,23 @@ func (s *SQLiteDatabaseManager) writeLoop() {
 					atomic.AddInt64(&s.metrics.BatchFlushBySize, 1)
 				}
 			} else {
+				// Flush any pending batch before executing non-batchable operations
+				if len(messageBatch) > 0 {
+					// Stop the timer since we're flushing
+					if !flushTimer.Stop() {
+						// Drain the timer channel if it fired
+						select {
+						case <-flushTimer.C:
+						default:
+						}
+					}
+					
+					s.flushMessageBatch(messageBatch, responseBatch)
+					messageBatch = messageBatch[:0]
+					responseBatch = responseBatch[:0]
+					atomic.AddInt64(&s.metrics.BatchFlushByTime, 1)
+				}
+				
 				// Non-batchable operations execute immediately
 				s.processWriteRequest(request)
 			}

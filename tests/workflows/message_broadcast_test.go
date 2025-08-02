@@ -261,6 +261,9 @@ func TestMessageBroadcastWorkflows(t *testing.T) {
 		failingMessages := failingConn.GetDeliveredMessages()
 		assert.Len(t, failingMessages, 0, "Failing instructor should not receive message")
 
+		// Wait for batch to be written before checking persistence
+		require.NoError(t, env.dbManager.WaitForPendingWrites())
+
 		// Verify message was still persisted despite partial failure
 		messages, err := env.dbManager.GetSessionMessages(session.ID)
 		require.NoError(t, err)
@@ -315,6 +318,9 @@ func TestMessageBroadcastWorkflows(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 
+		// Wait for all messages to be persisted before checking history
+		require.NoError(t, env.dbManager.WaitForPendingWrites())
+
 		// Now late joiner (student3) connects
 		lateJoiner := &ReliableTestConnection{userID: "student3", role: "student"}
 		require.NoError(t, env.connectionRegistry.Register("student3", lateJoiner))
@@ -350,8 +356,8 @@ func TestMessageBroadcastWorkflows(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		// Verify system can process new messages from late joiner
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the new message to be persisted
+		require.NoError(t, env.dbManager.WaitForPendingWrites())
 		
 		// Check message was processed by verifying it was persisted
 		finalMessages, err := env.dbManager.GetSessionMessages(session.ID)
