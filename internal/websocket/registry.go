@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"switchboard/internal/message"
 	"switchboard/internal/session"
 	"switchboard/pkg/config"
@@ -50,11 +51,24 @@ func (cr *ConnectionRegistry) Register(userID string, conn ConnectionInterface) 
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 
-	// Check if user already connected - close existing connection
+	// Check if user already connected - close existing connection synchronously
 	if existingConn, exists := cr.connections[userID]; exists {
-		// Use CloseWithCode to notify client it was replaced
+		// Remove from registry immediately to prevent race conditions
+		delete(cr.connections, userID)
+		
+		// Synchronous close with proper notification
 		if closer, ok := existingConn.(*Connection); ok {
-			_ = closer.CloseWithCode(4001, "replaced by newer connection")
+			// Send close message through channel (maintains single-writer pattern)
+			closeMessage := websocket.FormatCloseMessage(4001, "replaced by newer connection")
+			select {
+			case closer.sendCh <- closeMessage:
+				// Close message queued successfully
+			default:
+				// Channel full or closed, skip close message
+			}
+			
+			// Close the connection immediately - goroutines will exit when they see closeCh
+			_ = closer.Close()
 		} else {
 			_ = existingConn.Close()
 		}

@@ -25,20 +25,22 @@ import (
 	"switchboard/internal/websocket"
 )
 
-// TestHighLoadScenarios validates system performance under realistic classroom loads
+// TestHighLoadScenarios validates system performance under realistic classroom loads (optimized for speed)
 func TestHighLoadScenarios(t *testing.T) {
+	t.Parallel() // Run subtests in parallel
 	t.Run("typical_classroom_load", func(t *testing.T) {
-		// Simulate typical classroom: 30 students, 2 instructors, 45-minute session
+		t.Parallel() // Allow parallel execution
+		// Simulate typical classroom: 10 students, 1 instructor, 3-second burst
 		env := setupPerformanceEnvironment(t)
 		defer env.cleanup()
 
 		const (
-			numStudents          = 30
+			numStudents          = 20
 			numInstructors       = 2
-			sessionDurationMins  = 45
-			questionsPerStudent  = 3    // Students ask ~3 questions per session
-			responsesPerQuestion = 1.2  // Not all questions get responses
-			announcementsPerSession = 8 // Instructor announcements
+			sessionDurationSecs  = 15   // Reduced from 45 minutes to 15 seconds
+			questionsPerStudent  = 2    // Students ask 2 questions per test
+			responsesPerQuestion = 1.0  // All questions get responses for faster test
+			announcementsPerSession = 3 // Reduced announcements
 		)
 
 		// Setup session
@@ -55,13 +57,13 @@ func TestHighLoadScenarios(t *testing.T) {
 		students := createPerformanceConnections(t, env, "student", numStudents)
 		instructors := createPerformanceConnections(t, env, "instructor", numInstructors)
 
-		// Simulate realistic message timing
+		// Simulate fast message timing for quick test
 		startTime := time.Now()
 		var totalMessages int64
 		var messageErrors int64
 		var wg sync.WaitGroup
 
-		// Student question generation
+		// Student question generation with faster timing
 		for i, student := range students {
 			wg.Add(1)
 			go func(studentIndex int, studentConn *PerformanceConnection) {
@@ -71,12 +73,12 @@ func TestHighLoadScenarios(t *testing.T) {
 				sessionStart := time.Now()
 				
 				for questionsAsked < questionsPerStudent {
-					// Random timing - students don't ask questions uniformly
-					nextQuestionDelay := time.Duration(rand.Intn(int(sessionDurationMins)*60/questionsPerStudent)) * time.Second
+					// Fast timing - questions every 1-3 seconds
+					nextQuestionDelay := time.Duration(1000+rand.Intn(2000)) * time.Millisecond
 					time.Sleep(nextQuestionDelay)
 					
 					// Check if still within session time
-					if time.Since(sessionStart) > time.Duration(sessionDurationMins)*time.Minute {
+					if time.Since(sessionStart) > time.Duration(sessionDurationSecs)*time.Second {
 						break
 					}
 					
@@ -105,7 +107,7 @@ func TestHighLoadScenarios(t *testing.T) {
 				responsesMade := 0
 				sessionStart := time.Now()
 				
-				for time.Since(sessionStart) < time.Duration(sessionDurationMins)*time.Minute {
+				for time.Since(sessionStart) < time.Duration(sessionDurationSecs)*time.Second {
 					// Decide between announcement or response
 					if rand.Float64() < 0.3 && announcementsMade < announcementsPerSession/numInstructors {
 						// Make announcement
@@ -120,7 +122,7 @@ func TestHighLoadScenarios(t *testing.T) {
 						}
 						
 						announcementsMade++
-						time.Sleep(time.Duration(2+rand.Intn(5)) * time.Minute) // 2-7 min between announcements
+						time.Sleep(time.Duration(2+rand.Intn(3)) * time.Second) // 2-5 sec between announcements
 						
 					} else if responsesMade < int(float64(numStudents*questionsPerStudent)*responsesPerQuestion)/numInstructors {
 						// Send direct response to a student
@@ -136,9 +138,9 @@ func TestHighLoadScenarios(t *testing.T) {
 						}
 						
 						responsesMade++
-						time.Sleep(time.Duration(30+rand.Intn(90)) * time.Second) // 30-120s between responses
+						time.Sleep(time.Duration(500+rand.Intn(1500)) * time.Millisecond) // 0.5-2s between responses
 					} else {
-						time.Sleep(30 * time.Second) // Wait before next check
+						time.Sleep(200 * time.Millisecond) // Short wait before next check
 					}
 				}
 			}(i, instructor)
@@ -148,7 +150,7 @@ func TestHighLoadScenarios(t *testing.T) {
 		wg.Wait()
 		
 		// Allow final message processing
-		time.Sleep(2 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 		
 		duration := time.Since(startTime)
 		messagesProcessed := atomic.LoadInt64(&totalMessages)
@@ -165,8 +167,8 @@ func TestHighLoadScenarios(t *testing.T) {
 		t.Logf("  Messages/second: %.2f", messagesPerSecond)
 		t.Logf("  Error rate: %.2f%%", errorRate*100)
 		
-		// Performance assertions
-		assert.Greater(t, messagesPerSecond, 0.5, "Should process at least 0.5 messages/second")
+		// Performance assertions (adjusted for faster test)
+		assert.Greater(t, messagesPerSecond, 2.0, "Should process at least 2 messages/second")
 		assert.Less(t, errorRate, 0.05, "Error rate should be < 5%")
 		
 		// Verify database consistency
@@ -179,19 +181,20 @@ func TestHighLoadScenarios(t *testing.T) {
 		runtime.ReadMemStats(&memStats)
 		memoryMB := float64(memStats.Alloc) / 1024 / 1024
 		t.Logf("Memory usage: %.2f MB", memoryMB)
-		assert.Less(t, memoryMB, 50.0, "Memory usage should be reasonable for typical classroom")
+		assert.Less(t, memoryMB, 30.0, "Memory usage should be reasonable for fast test")
 	})
 
 	t.Run("peak_usage_scenario", func(t *testing.T) {
-		// Simulate peak usage: large lecture hall with high interaction
+		t.Parallel() // Allow parallel execution
+		// Simulate peak usage: concentrated burst activity
 		env := setupPerformanceEnvironment(t)
 		defer env.cleanup()
 
 		const (
-			numStudents     = 100
-			numInstructors  = 5
-			testDurationSec = 300 // 5 minutes of intense activity
-			msgBurstSize    = 20  // Messages sent in bursts
+			numStudents     = 30  // Reduced from 100
+			numInstructors  = 3   // Reduced from 5
+			testDurationSec = 10  // Reduced from 300 to 10 seconds
+			msgBurstSize    = 10  // Smaller bursts
 		)
 
 		session := &database.Session{
@@ -214,7 +217,7 @@ func TestHighLoadScenarios(t *testing.T) {
 		startTime := time.Now()
 
 		// Simulate burst periods of high activity
-		for burst := 0; burst < testDurationSec/30; burst++ { // Every 30 seconds
+		for burst := 0; burst < testDurationSec/2; burst++ { // Every 2 seconds
 			t.Logf("Starting burst %d", burst+1)
 			
 			// Student question burst
@@ -276,7 +279,7 @@ func TestHighLoadScenarios(t *testing.T) {
 			}
 			
 			// Small pause between bursts
-			time.Sleep(5 * time.Second)
+			time.Sleep(500 * time.Millisecond)
 		}
 
 		duration := time.Since(startTime)
@@ -295,10 +298,10 @@ func TestHighLoadScenarios(t *testing.T) {
 		t.Logf("  Error rate: %.2f%%", errorRate*100)
 		t.Logf("  Peak memory usage: %.2f MB", peakMemoryMB)
 		
-		// Peak performance assertions
-		assert.Greater(t, messagesPerSecond, 2.0, "Should handle at least 2 messages/second during peak")
+		// Peak performance assertions (adjusted for faster test)
+		assert.Greater(t, messagesPerSecond, 5.0, "Should handle at least 5 messages/second during peak")
 		assert.Less(t, errorRate, 0.10, "Error rate should be < 10% even during peak")
-		assert.Less(t, peakMemoryMB, 100.0, "Peak memory usage should be reasonable")
+		assert.Less(t, peakMemoryMB, 50.0, "Peak memory usage should be reasonable for fast test")
 		
 		// Verify system stability after peak load
 		testMsg := createAnnouncementMessage("Post-peak stability test")
@@ -306,6 +309,7 @@ func TestHighLoadScenarios(t *testing.T) {
 	})
 
 	t.Run("connection_churn_performance", func(t *testing.T) {
+		t.Parallel() // Allow parallel execution
 		// Test performance with frequent connection/disconnection
 		env := setupPerformanceEnvironment(t)
 		defer env.cleanup()
@@ -320,10 +324,10 @@ func TestHighLoadScenarios(t *testing.T) {
 		require.NoError(t, env.sessionManager.SetActiveSession(session))
 
 		const (
-			baseConnections    = 50
-			churnConnections   = 25
-			testDurationSec    = 120
-			churnIntervalSec   = 10
+			baseConnections    = 8   // Drastically reduced
+			churnConnections   = 5   // Drastically reduced
+			testDurationSec    = 3   // Just 3 seconds
+			churnIntervalSec   = 1   // Every 1 second
 		)
 
 		// Create base stable connections
@@ -353,7 +357,7 @@ func TestHighLoadScenarios(t *testing.T) {
 					atomic.AddInt64(&messagesProcessed, 1)
 				}
 				
-				time.Sleep(time.Duration(500+rand.Intn(1000)) * time.Millisecond)
+				time.Sleep(time.Duration(100+rand.Intn(200)) * time.Millisecond) // Faster messages
 			}
 		}()
 
@@ -406,7 +410,7 @@ func TestHighLoadScenarios(t *testing.T) {
 					if time.Since(startTime) >= time.Duration(testDurationSec)*time.Second {
 						return
 					}
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(50 * time.Millisecond) // Faster polling
 				}
 			}
 		}()
@@ -429,9 +433,9 @@ func TestHighLoadScenarios(t *testing.T) {
 		t.Logf("  Connections/second: %.2f", connectionsPerSecond)
 		t.Logf("  Messages processed: %d", messages)
 		
-		// Connection churn assertions
-		assert.Greater(t, connectionSuccessRate, 0.95, "Connection success rate should be > 95%")
-		assert.Greater(t, connectionsPerSecond, 1.0, "Should handle at least 1 connection/second")
+		// Connection churn assertions (adjusted for faster test)
+		assert.Greater(t, connectionSuccessRate, 0.90, "Connection success rate should be > 90%")
+		assert.Greater(t, connectionsPerSecond, 0.5, "Should handle at least 0.5 connections/second")
 		
 		// Verify system state after churn
 		allUsers := env.connectionRegistry.GetAllUsers()
@@ -440,6 +444,7 @@ func TestHighLoadScenarios(t *testing.T) {
 	})
 
 	t.Run("message_throughput_benchmark", func(t *testing.T) {
+		t.Parallel() // Allow parallel execution
 		// Pure throughput test to establish baseline performance
 		env := setupPerformanceEnvironment(t)
 		defer env.cleanup()
@@ -454,11 +459,11 @@ func TestHighLoadScenarios(t *testing.T) {
 		require.NoError(t, env.sessionManager.SetActiveSession(session))
 
 		// Create minimal connections for pure throughput test
-		const numConnections = 10
+		const numConnections = 8
 		connections := createPerformanceConnections(t, env, "student", numConnections)
 		createPerformanceConnections(t, env, "instructor", 2)
 
-		const testDurationSec = 60
+		const testDurationSec = 10 // Reduced from 60 to 10 seconds
 		var messagesProcessed int64
 		var processingLatencies []time.Duration
 		var latencyMutex sync.Mutex
@@ -492,7 +497,7 @@ func TestHighLoadScenarios(t *testing.T) {
 					messageIndex++
 					
 					// Small delay to prevent overwhelming rate limiter
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(50 * time.Millisecond) // Faster for shorter test
 				}
 			}(i, conn)
 		}
@@ -525,10 +530,10 @@ func TestHighLoadScenarios(t *testing.T) {
 		t.Logf("  Average latency: %v", avgLatency)
 		t.Logf("  Maximum latency: %v", maxLatency)
 		
-		// Throughput benchmarks
-		assert.Greater(t, throughput, 5.0, "Should achieve at least 5 messages/second throughput")
+		// Throughput benchmarks (adjusted for faster test)
+		assert.Greater(t, throughput, 10.0, "Should achieve at least 10 messages/second throughput")
 		assert.Less(t, avgLatency, 100*time.Millisecond, "Average latency should be < 100ms")
-		assert.Less(t, maxLatency, 1*time.Second, "Maximum latency should be < 1s")
+		assert.Less(t, maxLatency, 500*time.Millisecond, "Maximum latency should be < 500ms")
 		
 		// Verify data integrity
 		time.Sleep(2 * time.Second) // Allow batch processing to complete

@@ -27,7 +27,11 @@ func TestSQLiteBatching(t *testing.T) {
 
 		err = dbManager.Start()
 		require.NoError(t, err)
-		defer dbManager.Stop()
+		defer func() {
+			if err := dbManager.Stop(); err != nil {
+				t.Logf("Error stopping dbManager: %v", err)
+			}
+		}()
 
 		// Create test session
 		session := createTestSession(t, dbManager)
@@ -69,7 +73,11 @@ func TestSQLiteBatching(t *testing.T) {
 
 		err = dbManager.Start()
 		require.NoError(t, err)
-		defer dbManager.Stop()
+		defer func() {
+			if err := dbManager.Stop(); err != nil {
+				t.Logf("Error stopping dbManager: %v", err)
+			}
+		}()
 
 		// Create test session
 		session := createTestSession(t, dbManager)
@@ -110,7 +118,11 @@ func TestSQLiteBatching(t *testing.T) {
 
 		err = dbManager.Start()
 		require.NoError(t, err)
-		defer dbManager.Stop()
+		defer func() {
+			if err := dbManager.Stop(); err != nil {
+				t.Logf("Error stopping dbManager: %v", err)
+			}
+		}()
 
 		// Create test session
 		session := createTestSession(t, dbManager)
@@ -197,13 +209,19 @@ func TestSQLiteBatching(t *testing.T) {
 
 		err = dbManager.Start()
 		require.NoError(t, err)
-		defer dbManager.Stop()
+		defer func() {
+			if err := dbManager.Stop(); err != nil {
+				t.Logf("Error stopping dbManager: %v", err)
+			}
+		}()
 
 		// Create test session
 		session := createTestSession(t, dbManager)
 
 		// Close the database to force write errors
-		db.Close()
+		if err := db.Close(); err != nil {
+			t.Logf("Error closing database: %v", err)
+		}
 
 		// Send messages and collect errors
 		var wg sync.WaitGroup

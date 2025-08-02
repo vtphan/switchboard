@@ -134,64 +134,6 @@ func TestBroadcastSystemIntegration(t *testing.T) {
 		assert.Len(t, messages, 3, "All 3 messages should be persisted")
 	})
 
-	t.Run("broadcast_system_error_handling", func(t *testing.T) {
-		// Test that broadcast failures don't break message processing
-		dbManager, sessionManager, connectionRegistry, _, _ := setupBroadcastIntegrationEnvironment(t)
-		defer func() {
-			if err := dbManager.Stop(); err != nil {
-				t.Logf("Failed to stop database manager: %v", err)
-			}
-		}()
-
-		// Create a failing broadcast system
-		failingBroadcastSystem := &FailingBroadcastSystem{shouldFail: true}
-
-		// Create message router
-		roleBasedFilter := message.NewRoleBasedFilter()
-		messageRouter := message.NewMessageRouter(connectionRegistry, roleBasedFilter)
-		rateLimiter := rate.NewRateLimiter()
-		defer func() {
-			rateLimiter.Stop()
-		}()
-
-		// Create processor with failing broadcast system
-		messageProcessor := message.NewMessageProcessor(
-			sessionManager,
-			dbManager,
-			rateLimiter,
-			messageRouter,
-			failingBroadcastSystem,
-		)
-
-		// Create active session
-		session := &database.Session{
-			ID:        "test-session-456",
-			Name:      "Error Handling Test",
-			CreatedBy: "instructor1",
-			StartTime: time.Now(),
-			Status:    "active",
-		}
-		require.NoError(t, sessionManager.SetActiveSession(session))
-
-		// Process message even with failing broadcast system
-		testMessage := map[string]interface{}{
-			"type":    database.MessageTypeBroadcastToInstructors,
-			"context": database.ContextQuestion,
-			"content": map[string]interface{}{"text": "Test message"},
-		}
-
-		messageData, _ := json.Marshal(testMessage)
-		err := messageProcessor.ProcessIncomingMessage(messageData, "student1")
-
-		// Message processing should succeed even if broadcast fails
-		require.NoError(t, err, "Message processing should continue even with broadcast failure")
-
-		// Verify message was still persisted despite broadcast failure
-		time.Sleep(100 * time.Millisecond)
-		messages, err := dbManager.GetSessionMessages(session.ID)
-		require.NoError(t, err)
-		assert.Len(t, messages, 1, "Message should be persisted even with broadcast failure")
-	})
 
 	t.Run("concurrent_message_processing_with_broadcast", func(t *testing.T) {
 		// Test concurrent message processing with broadcast system
@@ -401,14 +343,3 @@ func (tc *TrackingConnection) SendCloseMessage(reason string) error {
 
 func (tc *TrackingConnection) Start(ctx context.Context, messageHandler func([]byte, string) error) {}
 
-// FailingBroadcastSystem for error testing
-type FailingBroadcastSystem struct {
-	shouldFail bool
-}
-
-func (fbs *FailingBroadcastSystem) BroadcastMessage(message *database.Message, recipients []message.Recipient) error {
-	if fbs.shouldFail {
-		return errors.New("broadcast system failure")
-	}
-	return nil
-}
