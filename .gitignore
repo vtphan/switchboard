@@ -12,6 +12,7 @@ main
 server
 
 # Database files (development)
+db/
 *.db
 *.db-shm  
 *.db-wal
