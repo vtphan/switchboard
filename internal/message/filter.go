@@ -4,7 +4,7 @@ import "switchboard/internal/database"
 
 // RoleBasedFilter implements educational privacy rules for message filtering
 // This filter ensures students don't see other students' messages for privacy,
-// while instructors can see all messages for monitoring purposes
+// and instructors only see messages they should have access to
 type RoleBasedFilter struct{}
 
 // NewRoleBasedFilter creates a new RoleBasedFilter instance
@@ -14,8 +14,8 @@ func NewRoleBasedFilter() *RoleBasedFilter {
 
 // ShouldReceiveMessage determines if a recipient should receive a message based on their role
 // Implements educational privacy rules as specified in tech specs:
-// - Students see only their own messages to instructors and instructor broadcasts
-// - Instructors see all messages for monitoring and support purposes
+// - Students see only their own messages and broadcasts to students
+// - Instructors see broadcast_to_instructors messages and direct messages they participate in
 func (f *RoleBasedFilter) ShouldReceiveMessage(msg *database.Message, recipient Recipient) bool {
 	if msg == nil || recipient == nil {
 		return false
@@ -33,7 +33,6 @@ func (f *RoleBasedFilter) ShouldReceiveMessage(msg *database.Message, recipient 
 		// Direct messages should only be seen by:
 		// 1. The sender (always)
 		// 2. The recipient (always)
-		// 3. Instructors (for monitoring purposes)
 
 		if msg.ToUser == nil {
 			return false // Invalid direct message
@@ -51,17 +50,12 @@ func (f *RoleBasedFilter) ShouldReceiveMessage(msg *database.Message, recipient 
 			return true
 		}
 
-		// Instructors can see all direct messages for monitoring
-		if recipientRole == "instructor" {
-			return true
-		}
-
-		// Other users (e.g., other students) cannot see this direct message
+		// Other users cannot see this direct message
 		return false
 
 	case database.MessageTypeBroadcastToStudents:
-		// All students and instructors should receive broadcast_to_students messages
-		return recipientRole == "student" || recipientRole == "instructor"
+		// Only students should receive broadcast_to_students messages
+		return recipientRole == "student"
 
 	case "system":
 		// System messages (like session_started, session_ended) should be delivered to all users

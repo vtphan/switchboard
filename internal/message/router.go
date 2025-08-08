@@ -66,7 +66,8 @@ func (r *MessageRouterImpl) getBroadcastToInstructorsRecipients(connectedUsers [
 	return recipients
 }
 
-// getDirectMessageRecipients returns the target user and all instructors for educational oversight
+// getDirectMessageRecipients returns only the target user for private messaging
+// Updated privacy rules: instructors no longer have oversight of direct messages
 func (r *MessageRouterImpl) getDirectMessageRecipients(msg *database.Message, connectedUsers []Recipient) ([]Recipient, error) {
 	if msg.ToUser == nil {
 		return nil, fmt.Errorf("%w: direct message must have to_user specified", errors.ErrInvalidMessageData)
@@ -74,38 +75,38 @@ func (r *MessageRouterImpl) getDirectMessageRecipients(msg *database.Message, co
 
 	targetUserID := *msg.ToUser
 	var recipients []Recipient
-
-	// Find the target user among connected users
 	var targetFound bool
+
+	// Find both sender and target user among connected users
 	for _, user := range connectedUsers {
-		if user.GetUserID() == targetUserID {
+		userID := user.GetUserID()
+		// Add sender (they should see their own message)
+		if userID == msg.FromUser {
+			recipients = append(recipients, user)
+		}
+		// Add target recipient
+		if userID == targetUserID {
 			recipients = append(recipients, user)
 			targetFound = true
-			break
 		}
 	}
 
-	// Add all instructors for educational oversight
-	for _, user := range connectedUsers {
-		if user.GetRole() == "instructor" {
-			// Avoid adding the same instructor twice if they are the target
-			if !targetFound || user.GetUserID() != targetUserID {
-				recipients = append(recipients, user)
-			}
-		}
+	// Validate that target user exists and is connected
+	if !targetFound {
+		return nil, fmt.Errorf("%w: target user '%s' not found or not connected", errors.ErrInvalidMessageData, targetUserID)
 	}
 
 	return recipients, nil
 }
 
-// getBroadcastToStudentsRecipients returns all students and instructors
-// Instructors receive all messages for monitoring purposes as per educational privacy rules
+// getBroadcastToStudentsRecipients returns only students
+// Updated privacy rules: instructors no longer receive broadcast_to_students messages
 func (r *MessageRouterImpl) getBroadcastToStudentsRecipients(connectedUsers []Recipient) []Recipient {
 	var recipients []Recipient
 
 	for _, user := range connectedUsers {
-		// Both students and instructors receive broadcast_to_students messages
-		if user.GetRole() == "student" || user.GetRole() == "instructor" {
+		// Only students receive broadcast_to_students messages
+		if user.GetRole() == "student" {
 			recipients = append(recipients, user)
 		}
 	}

@@ -94,22 +94,30 @@ func TestMessageRouter_GetRecipients(t *testing.T) {
 			t.Errorf("Expected no error for broadcast_to_students, got: %v", err)
 		}
 
-		// Should return all students and instructors
-		expectedCount := 4
+		// Should return only students (updated privacy rules)
+		expectedCount := 2
 		if len(recipients) != expectedCount {
 			t.Errorf("Expected %d recipients, got %d", expectedCount, len(recipients))
 		}
 
-		// Verify all users are included (both students and instructors)
+		// Verify only students are included (no instructors due to privacy rules)
 		userIDs := make(map[string]bool)
 		for _, recipient := range recipients {
 			userIDs[recipient.GetUserID()] = true
 		}
 
-		expectedUsers := []string{"instructor1", "instructor2", "student1", "student2"}
+		expectedUsers := []string{"student1", "student2"}
 		for _, userID := range expectedUsers {
 			if !userIDs[userID] {
 				t.Errorf("Expected %s to be a recipient", userID)
+			}
+		}
+
+		// Verify instructors are NOT included
+		excludedUsers := []string{"instructor1", "instructor2"}
+		for _, userID := range excludedUsers {
+			if userIDs[userID] {
+				t.Errorf("Expected %s to NOT be a recipient due to privacy rules", userID)
 			}
 		}
 	})
@@ -128,14 +136,23 @@ func TestMessageRouter_GetRecipients(t *testing.T) {
 			t.Errorf("Expected no error for direct message, got: %v", err)
 		}
 
-		// Should only return the target user
-		expectedCount := 1
+		// Should return both sender and target user
+		expectedCount := 2
 		if len(recipients) != expectedCount {
-			t.Errorf("Expected %d recipient, got %d", expectedCount, len(recipients))
+			t.Errorf("Expected %d recipients, got %d", expectedCount, len(recipients))
 		}
 
-		if recipients[0].GetUserID() != "instructor1" {
-			t.Errorf("Expected recipient to be instructor1, got: %s", recipients[0].GetUserID())
+		// Verify both sender and target are included
+		userIDs := make(map[string]bool)
+		for _, recipient := range recipients {
+			userIDs[recipient.GetUserID()] = true
+		}
+
+		if !userIDs["student1"] {
+			t.Error("Expected sender (student1) to be a recipient")
+		}
+		if !userIDs["instructor1"] {
+			t.Error("Expected target (instructor1) to be a recipient")
 		}
 	})
 
@@ -149,13 +166,19 @@ func TestMessageRouter_GetRecipients(t *testing.T) {
 		}
 
 		recipients, err := router.GetRecipients(msg)
-		if err != nil {
-			t.Errorf("Expected no error for direct message to unconnected user, got: %v", err)
+		if err == nil {
+			t.Error("Expected error for direct message to non-existent user")
 		}
 
-		// Should return empty list (message will be persisted but not delivered real-time)
-		if len(recipients) != 0 {
-			t.Errorf("Expected 0 recipients for unconnected target, got %d", len(recipients))
+		// Should return nil recipients when target user doesn't exist
+		if recipients != nil {
+			t.Errorf("Expected nil recipients for non-existent target, got %v", recipients)
+		}
+
+		// Verify specific error message
+		expectedError := "target user 'instructor999' not found or not connected"
+		if err != nil && !contains(err.Error(), expectedError) {
+			t.Errorf("Expected error containing '%s', got: %v", expectedError, err)
 		}
 	})
 
@@ -279,20 +302,25 @@ func TestMessageRouter_SpecialRoles(t *testing.T) {
 			t.Errorf("Expected no error, got: %v", err)
 		}
 
-		// Should only return students and instructors (not admin or guest)
-		expectedCount := 2
+		// Should only return students (not instructors, admin, or guest due to privacy rules)
+		expectedCount := 1
 		if len(recipients) != expectedCount {
 			t.Errorf("Expected %d recipients, got %d", expectedCount, len(recipients))
 		}
 
-		// Verify only student and instructor are included
+		// Verify only student is included
 		recipientIDs := make(map[string]bool)
 		for _, recipient := range recipients {
 			recipientIDs[recipient.GetUserID()] = true
 		}
 
-		if !recipientIDs["student1"] || !recipientIDs["instructor1"] {
-			t.Error("Expected student1 and instructor1 to be recipients")
+		if !recipientIDs["student1"] {
+			t.Error("Expected student1 to be a recipient")
+		}
+
+		// Verify instructor is NOT included due to privacy rules
+		if recipientIDs["instructor1"] {
+			t.Error("Expected instructor1 to NOT be a recipient due to privacy rules")
 		}
 
 		if recipientIDs["admin1"] || recipientIDs["guest1"] {
