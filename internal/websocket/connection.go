@@ -10,9 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"switchboard/pkg/config"
 	pkgErrors "switchboard/pkg/errors"
+
+	"github.com/gorilla/websocket"
 )
 
 // WebSocketConn interface abstracts the gorilla websocket connection for testing
@@ -34,11 +35,11 @@ type RegistryNotifier interface {
 type Connection struct {
 	userID   string
 	role     string
-	conn     WebSocketConn   // Interface for testing
-	sendCh   chan []byte     // Buffered: ConnectionSendBufferSize (100)
+	conn     WebSocketConn // Interface for testing
+	sendCh   chan []byte   // Buffered: ConnectionSendBufferSize (100)
 	closeCh  chan struct{}
-	lastSeen atomic.Value    // time.Time
-	mu       sync.RWMutex    // Protects userID and role
+	lastSeen atomic.Value     // time.Time
+	mu       sync.RWMutex     // Protects userID and role
 	registry RegistryNotifier // For notifying registry of heartbeat updates
 }
 
@@ -51,7 +52,7 @@ type ConnectionInterface interface {
 	SetCredentials(username, role string) error
 	UpdateActivity()
 	GetLastSeen() time.Time
-	SendMessage(data []byte) error // Extended interface for message delivery
+	SendMessage(data []byte) error        // Extended interface for message delivery
 	SendCloseMessage(reason string) error // Send close frame with reason
 }
 
@@ -137,7 +138,7 @@ func (c *Connection) SetCredentials(username, role string) error {
 	c.userID = username
 	c.role = role
 	c.mu.Unlock()
-	
+
 	// Call UpdateActivity outside the lock to avoid deadlock
 	c.UpdateActivity()
 
@@ -161,13 +162,13 @@ func (c *Connection) GetRole() string {
 // UpdateActivity updates the last seen timestamp atomically and notifies registry
 func (c *Connection) UpdateActivity() {
 	c.lastSeen.Store(time.Now())
-	
+
 	// Notify registry of heartbeat update if registry is set
 	c.mu.RLock()
 	registry := c.registry
 	userID := c.userID
 	c.mu.RUnlock()
-	
+
 	if registry != nil && userID != "" {
 		registry.UpdateHeartbeat(userID)
 	}
@@ -220,7 +221,7 @@ func (c *Connection) writeLoop(ctx context.Context) {
 		select {
 		case data := <-c.sendCh:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			
+
 			// Check if this is a close message (raw bytes from FormatCloseMessage)
 			if len(data) >= 2 && data[0] == 0x03 && data[1] == 0xe9 { // CloseGoingAway code
 				if err := c.conn.WriteMessage(websocket.CloseMessage, data); err != nil {
@@ -228,7 +229,7 @@ func (c *Connection) writeLoop(ctx context.Context) {
 				}
 				return // Close message sent - terminate writeLoop
 			}
-			
+
 			// Regular message
 			if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				log.Printf("Write error for user %s: %v", c.GetUserID(), err)
@@ -283,8 +284,22 @@ func (c *Connection) readLoop(ctx context.Context, messageHandler func([]byte, s
 				if userID != "" { // Only process if authenticated
 					log.Printf("WEBSOCKET CALLING: messageHandler for user %s", userID)
 					if err := messageHandler(data, userID); err != nil {
-						// Log error but continue processing
+						// Log error and send error response to client
 						log.Printf("Message processing error for user %s: %v", userID, err)
+
+						// Send error response back to client
+						errorResponse := map[string]interface{}{
+							"type": "error",
+							"error": map[string]interface{}{
+								"message": err.Error(),
+								"type":    "message_processing_error",
+							},
+							"timestamp": time.Now().Format(time.RFC3339),
+						}
+
+						if errorData, marshalErr := json.Marshal(errorResponse); marshalErr == nil {
+							c.SendMessage(errorData)
+						}
 					} else {
 						log.Printf("WEBSOCKET SUCCESS: messageHandler completed for user %s", userID)
 					}

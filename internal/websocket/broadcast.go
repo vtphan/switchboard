@@ -70,19 +70,14 @@ func (bs *BroadcastSystem) BroadcastMessage(message *database.Message, recipient
 	deliveredCount := 0
 	errorCount := 0
 
-	// Process each recipient with role-based filtering and non-blocking delivery
+	// Process each recipient with non-blocking delivery
+	// Note: Role-based filtering is already handled by the message router
 	for _, recipient := range recipients {
-		// Apply role-based filtering using expected interface signature
-		shouldReceive := bs.filter.ShouldReceiveMessage(message, recipient.GetRole(), recipient.GetUserID())
-		if !shouldReceive {
-			continue
-		}
-
 		// Attempt non-blocking delivery
 		err := recipient.SendMessage(messageData)
 		if err != nil {
 			errorCount++
-			log.Printf("BroadcastSystem: Failed to deliver message %s to user %s: %v", 
+			log.Printf("BroadcastSystem: Failed to deliver message %s to user %s: %v",
 				message.ID, recipient.GetUserID(), err)
 		} else {
 			deliveredCount++
@@ -90,7 +85,7 @@ func (bs *BroadcastSystem) BroadcastMessage(message *database.Message, recipient
 	}
 
 	// Log delivery statistics for monitoring
-	log.Printf("BroadcastSystem: Message %s delivered to %d recipients, %d failures", 
+	log.Printf("BroadcastSystem: Message %s delivered to %d recipients, %d failures",
 		message.ID, deliveredCount, errorCount)
 
 	// Return error only when all deliveries failed AND there were recipients who should have received it
@@ -112,15 +107,15 @@ func (bs *BroadcastSystem) mustMarshalJSON(message *database.Message) ([]byte, e
 			"id":    message.ID,
 			"type":  "system_error",
 		}
-		
+
 		fallbackData, fallbackErr := json.Marshal(fallback)
 		if fallbackErr != nil {
 			// Ultimate fallback - return static error JSON
 			return []byte(`{"error":"critical marshaling failure","type":"system_error"}`), err
 		}
-		
+
 		return fallbackData, err
 	}
-	
+
 	return data, nil
 }

@@ -45,3 +45,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# ignore all node_modules
+node_modules/

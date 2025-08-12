@@ -126,6 +126,16 @@ func NewApplication(config *Config) (*Application, error) {
 	// Phase 2: Initialize session management
 	app.sessionManager = session.NewSessionManager(app.dbManager)
 
+	// Sync session state: Load active session from database if exists
+	if activeSession, err := app.dbManager.GetActiveSession(); err == nil && activeSession != nil {
+		log.Printf("Found active session in database: %s", activeSession.ID)
+		if err := app.sessionManager.SetActiveSession(activeSession); err != nil {
+			log.Printf("Warning: Could not restore active session to memory: %v", err)
+		} else {
+			log.Printf("Restored active session to memory: %s", activeSession.ID)
+		}
+	}
+
 	// Phase 3: Initialize message processing
 	app.rateLimiter = rate.NewRateLimiter()
 	app.connectionRegistry = websocket.NewConnectionRegistry(app.sessionManager)
@@ -208,7 +218,7 @@ func (app *Application) Stop(ctx context.Context) error {
 	// Phase 1: Stop accepting new connections (HTTP server shutdown)
 	log.Println("Phase 1: Stopping HTTP server...")
 	phaseStart := time.Now()
-	
+
 	if err := app.httpServer.Stop(ctx); err != nil {
 		log.Printf("HTTP server shutdown error: %v", err)
 	} else {
@@ -218,11 +228,11 @@ func (app *Application) Stop(ctx context.Context) error {
 	// Phase 2: Wait for in-flight message processing (simplified - no active tracking needed)
 	log.Println("Phase 2: Waiting for in-flight message processing...")
 	phaseStart = time.Now()
-	
+
 	// Create timeout context for message processing phase
 	messageCtx, messageCancel := context.WithTimeout(ctx, config.MessageProcessingTimeout)
 	defer messageCancel()
-	
+
 	// Since message processing is synchronous in current implementation,
 	// we add a small delay to allow any concurrent processing to complete
 	select {
@@ -235,14 +245,14 @@ func (app *Application) Stop(ctx context.Context) error {
 	// Phase 3: Close all WebSocket connections gracefully
 	log.Println("Phase 3: Closing WebSocket connections...")
 	phaseStart = time.Now()
-	
+
 	app.connectionRegistry.Stop() // This now sends close messages before closing
 	log.Printf("Phase 3 completed in %v", time.Since(phaseStart))
 
 	// Phase 4: Stop database manager and flush pending writes
 	log.Println("Phase 4: Stopping database manager...")
 	phaseStart = time.Now()
-	
+
 	if err := app.dbManager.Stop(); err != nil {
 		log.Printf("Database manager shutdown error: %v", err)
 	} else {
@@ -252,14 +262,14 @@ func (app *Application) Stop(ctx context.Context) error {
 	// Phase 5: Stop rate limiter and wait for remaining goroutines
 	log.Println("Phase 5: Stopping remaining components...")
 	phaseStart = time.Now()
-	
+
 	// Create timeout context for goroutine cleanup
 	cleanupCtx, cleanupCancel := context.WithTimeout(ctx, config.GoroutineCleanupTimeout)
 	defer cleanupCancel()
-	
+
 	// Stop rate limiter
 	app.rateLimiter.Stop()
-	
+
 	// Wait for cleanup timeout or context cancellation
 	select {
 	case <-time.After(100 * time.Millisecond):
@@ -270,11 +280,11 @@ func (app *Application) Stop(ctx context.Context) error {
 
 	totalTime := time.Since(shutdownStart)
 	log.Printf("Graceful shutdown completed successfully in %v", totalTime)
-	
+
 	if totalTime > 10*time.Second {
 		log.Printf("WARNING: Shutdown took longer than 10 seconds")
 	}
-	
+
 	return nil
 }
 
