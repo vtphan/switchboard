@@ -70,13 +70,13 @@ func TestRoleBasedFilter_ShouldReceiveMessage(t *testing.T) {
 			t.Error("Expected student2 to receive broadcast_to_students message")
 		}
 
-		// Instructors should also receive the message (for monitoring)
-		if !filter.ShouldReceiveMessage(msg, instructor1) {
-			t.Error("Expected instructor1 to receive broadcast_to_students message")
+		// Instructors should NOT receive broadcast_to_students messages (updated privacy rules)
+		if filter.ShouldReceiveMessage(msg, instructor1) {
+			t.Error("Expected instructor1 to NOT receive broadcast_to_students message")
 		}
 
-		if !filter.ShouldReceiveMessage(msg, instructor2) {
-			t.Error("Expected instructor2 to receive broadcast_to_students message")
+		if filter.ShouldReceiveMessage(msg, instructor2) {
+			t.Error("Expected instructor2 to NOT receive broadcast_to_students message")
 		}
 
 		// Other roles should NOT receive the message
@@ -124,13 +124,13 @@ func TestRoleBasedFilter_ShouldReceiveMessage(t *testing.T) {
 			Context:  database.ContextPeerHelp,
 		}
 
-		// Instructors should see all direct messages for monitoring
-		if !filter.ShouldReceiveMessage(msg, instructor1) {
-			t.Error("Expected instructor1 to see direct message for monitoring")
+		// Instructors should NOT see direct messages between students (updated privacy rules)
+		if filter.ShouldReceiveMessage(msg, instructor1) {
+			t.Error("Expected instructor1 to NOT see direct message between students")
 		}
 
-		if !filter.ShouldReceiveMessage(msg, instructor2) {
-			t.Error("Expected instructor2 to see direct message for monitoring")
+		if filter.ShouldReceiveMessage(msg, instructor2) {
+			t.Error("Expected instructor2 to NOT see direct message between students")
 		}
 	})
 
@@ -168,9 +168,9 @@ func TestRoleBasedFilter_ShouldReceiveMessage(t *testing.T) {
 			t.Error("Expected recipient (student2) to see message sent to them")
 		}
 
-		// Instructors can monitor
-		if !filter.ShouldReceiveMessage(msg, instructor1) {
-			t.Error("Expected instructor1 to see student-to-student message for monitoring")
+		// Instructors cannot monitor student-to-student messages (updated privacy rules)
+		if filter.ShouldReceiveMessage(msg, instructor1) {
+			t.Error("Expected instructor1 to NOT see student-to-student message")
 		}
 
 		// Other students cannot see (privacy)
@@ -284,17 +284,17 @@ func TestRoleBasedFilter_FilterRecipients(t *testing.T) {
 
 		filtered := filter.FilterRecipients(msg, allRecipients)
 
-		// Should include students and instructors (not admin)
-		expectedCount := 4
+		// Should include only students (updated privacy rules)
+		expectedCount := 2
 		if len(filtered) != expectedCount {
 			t.Errorf("Expected %d filtered recipients, got %d", expectedCount, len(filtered))
 		}
 
-		// Verify filtered recipients are students or instructors only
+		// Verify filtered recipients are students only
 		for _, recipient := range filtered {
 			role := recipient.GetRole()
-			if role != "student" && role != "instructor" {
-				t.Errorf("Expected filtered recipients to be students or instructors, got role: %s", role)
+			if role != "student" {
+				t.Errorf("Expected filtered recipients to be students only, got role: %s", role)
 			}
 		}
 	})
@@ -310,8 +310,8 @@ func TestRoleBasedFilter_FilterRecipients(t *testing.T) {
 
 		filtered := filter.FilterRecipients(msg, allRecipients)
 
-		// Should include sender, recipient, and all instructors (for monitoring)
-		expectedCount := 3 // student1 (sender), instructor1 (recipient), instructor2 (monitor)
+		// Should include only sender and recipient (updated privacy rules)
+		expectedCount := 2 // student1 (sender), instructor1 (recipient)
 		if len(filtered) != expectedCount {
 			t.Errorf("Expected %d filtered recipients, got %d", expectedCount, len(filtered))
 		}
@@ -322,16 +322,20 @@ func TestRoleBasedFilter_FilterRecipients(t *testing.T) {
 			recipientIDs[recipient.GetUserID()] = true
 		}
 
-		expectedRecipients := []string{"student1", "instructor1", "instructor2"}
+		expectedRecipients := []string{"student1", "instructor1"}
 		for _, expectedID := range expectedRecipients {
 			if !recipientIDs[expectedID] {
 				t.Errorf("Expected %s to be in filtered recipients", expectedID)
 			}
 		}
 
-		// Verify student2 and admin are NOT included
+		// Verify student2, instructor2, and admin are NOT included
 		if recipientIDs["student2"] {
 			t.Error("Expected student2 to NOT be in filtered recipients")
+		}
+
+		if recipientIDs["instructor2"] {
+			t.Error("Expected instructor2 to NOT be in filtered recipients")
 		}
 
 		if recipientIDs["admin1"] {

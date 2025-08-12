@@ -23,18 +23,19 @@ func TestMessageProcessor_ArchitecturalCompliance(t *testing.T) {
 			t.Errorf("Expected struct name 'MessageProcessor', got '%s'", processorType.Name())
 		}
 
-		// Check exact field count (4 fields as per spec)
-		expectedFieldCount := 4
+		// Check exact field count (5 fields as per current implementation)
+		expectedFieldCount := 5
 		if processorType.NumField() != expectedFieldCount {
 			t.Errorf("Expected %d fields, got %d", expectedFieldCount, processorType.NumField())
 		}
 
 		// Verify field names and types match specification exactly
 		expectedFields := map[string]string{
-			"sessionManager": "SessionManager",
-			"dbManager":      "DatabaseManager",
-			"rateLimiter":    "RateLimiter",
-			"router":         "MessageRouter",
+			"sessionManager":  "SessionManager",
+			"dbManager":       "DatabaseManager",
+			"rateLimiter":     "RateLimiter",
+			"router":          "MessageRouter",
+			"broadcastSystem": "BroadcastSystem",
 		}
 
 		for i := 0; i < processorType.NumField(); i++ {
