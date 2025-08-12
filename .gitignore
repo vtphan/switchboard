@@ -2,6 +2,8 @@
 CLAUDE.md
 .claude/
 
+node_modules
+
 # Planning and temporary files
 planning/
 
