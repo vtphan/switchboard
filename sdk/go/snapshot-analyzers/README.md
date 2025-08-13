@@ -25,16 +25,19 @@ Agent Clients (Role: "instructor")
 
 ### Communication Flow
 ```
-1. Students → broadcast_to_instructors (context: "code_snapshot")
-2. Agents   → direct_message to student (context: "analysis_feedback")
+1. Students → broadcast_to_instructors (context: "submission")
+2. Agents   → direct_message to student (context: "response")
 ```
 
 ### Message Protocol
 
+**Important**: Uses valid Switchboard contexts (`submission` for code, `response` for feedback) to ensure proper message validation.
+
 #### Code Snapshot Message
 ```go
 {
-    "context": "code_snapshot",
+    "context": "submission",
+    "type": "code_snapshot",
     "student_id": "alice",
     "code": "func Calculate(x int) int {\n    return x * 2\n}",
     "language": "go",
@@ -47,7 +50,7 @@ Agent Clients (Role: "instructor")
 #### Analysis Feedback Message
 ```go
 {
-    "context": "analysis_feedback",
+    "context": "response",
     "agent_type": "syntax",
     "student_id": "alice",
     "analysis": {
@@ -118,10 +121,8 @@ snapshot-analyzers/
 ├── shared/
 │   ├── code_samples.go       # Sample code snippets for students
 │   └── analysis.go           # Common analysis utilities
-├── demo/
-│   └── run_demo.sh          # Automated demo runner
-└── examples/
-    └── manual_tester.go       # Manual testing interface
+└── demo/
+    └── run_demo.sh          # Automated demo runner
 ```
 
 ## 👩‍💻 Student Clients
@@ -280,10 +281,7 @@ cd shared && go test -v
 Tests the analysis functions and code sample generators.
 
 ### Integration Test
-```bash
-go run examples/manual_tester.go
-```
-Interactive testing interface for custom code snippets.
+Run individual components manually to test specific scenarios.
 
 ### Full Demo Test
 ```bash
@@ -294,20 +292,13 @@ Automated test with predefined scenarios and expected outcomes.
 ## 🎮 Manual Testing
 
 ### Send Custom Code
-```bash
-go run examples/manual_tester.go
-```
-Interactive prompt to:
-1. Choose student identity (Alice/Bob)
-2. Enter custom Go code
-3. Send to agents
-4. View real-time analysis
+Modify the code samples in `shared/code_samples.go` to test different scenarios:
+1. Edit Alice or Bob's code samples
+2. Restart the student clients
+3. Observe agent analysis responses
 
 ### Monitor All Traffic
-```bash
-go run examples/manual_tester.go --monitor
-```
-Observer mode to see all messages without sending.
+Watch the console output from each component to see real-time message processing and analysis results.
 
 ## 📈 Performance Metrics
 
